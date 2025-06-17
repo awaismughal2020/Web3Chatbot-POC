@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # Redis Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: web3-chatbot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Web3 Chatbot Application
+  chatbot:
+    build: .
+    container_name: web3-chatbot-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Redis connection
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # Application settings
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - ENVIRONMENT=production
+      - APP_DEBUG=false
+      - APP_RELOAD=false
+
+      # Cache settings
+      - CACHE_PRICE_TTL=30
+      - CACHE_CHAT_TTL=3600
+
+      # API keys (set these in .env file)
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY:-}
+
+      # Performance settings
+      - MAX_CONCURRENT_REQUESTS=100
+      - REQUEST_TIMEOUT=30
+
+      # Logging
+      - LOG_LEVEL=INFO
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    volumes:
+      - ./logs:/app/logs
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Redis Commander for Redis GUI
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: web3-chatbot-redis-ui
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles:
+      - debug
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: web3-chatbot-network
