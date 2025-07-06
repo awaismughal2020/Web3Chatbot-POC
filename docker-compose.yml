@@ -17,6 +17,26 @@ services:
       timeout: 5s
       retries: 3
 
+  # Typesense Search Service
+  typesense:
+    image: typesense/typesense:0.25.1
+    container_name: web3-chatbot-typesense
+    ports:
+      - "8108:8108"
+    volumes:
+      - typesense_data:/data
+    environment:
+      - TYPESENSE_DATA_DIR=/data
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY:-xyz}
+      - TYPESENSE_ENABLE_CORS=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
   # Web3 Chatbot Application
   chatbot:
     build: .
@@ -28,6 +48,12 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
 
+      # Typesense connection
+      - TYPESENSE_HOST=typesense
+      - TYPESENSE_PORT=8108
+      - TYPESENSE_PROTOCOL=http
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY:-xyz}
+
       # Application settings
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
@@ -38,6 +64,10 @@ services:
       # Cache settings
       - CACHE_PRICE_TTL=30
       - CACHE_CHAT_TTL=3600
+
+      # Chat history settings
+      - MAX_CONTEXT_MESSAGES=10
+      - CONVERSATION_IDLE_TIMEOUT=3600
 
       # API keys (set these in .env file)
       - GROQ_API_KEY=${GROQ_API_KEY}
@@ -52,6 +82,8 @@ services:
 
     depends_on:
       redis:
+        condition: service_healthy
+      typesense:
         condition: service_healthy
 
     restart: unless-stopped
@@ -82,6 +114,8 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  typesense_data:
     driver: local
 
 networks:

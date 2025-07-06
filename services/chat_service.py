@@ -1,17 +1,20 @@
 import asyncio
 import json
 import time
-from typing import AsyncGenerator, List, Dict
+from typing import AsyncGenerator, List, Dict, Optional
 from utils.groq_client import GroqClient
 from utils.cache import CacheManager
+from utils.typesense_client import TypesenseClient
 
 
 class ChatService:
     def __init__(self, cache_manager: CacheManager):
         self.groq_client = GroqClient()
         self.cache = cache_manager
+        self.typesense = TypesenseClient()
+        self.active_conversations = {}  # Track active conversations
 
-        # System prompt for Web3/Crypto chatbot (ULTRA RESTRICTIVE)
+        # System prompt for Web3/Crypto chatbot
         self.system_prompt = """You are an EXTREMELY specialized Web3 and cryptocurrency assistant. You have ABSOLUTE RESTRICTIONS:
 
 🚫 CRITICAL INSTRUCTION: If ANY question is about non-Web3 topics, you MUST respond with EXACTLY this:
@@ -30,39 +33,56 @@ class ChatService:
 - Latest Web3 trends, updates, and industry news
 - Layer 2 solutions and blockchain scaling
 
-✅ For Web3 news/information requests:
-- Provide educational information about Web3 concepts and trends
-- Explain recent developments in DeFi, NFTs, and blockchain technology
-- Share knowledge about emerging Web3 protocols and platforms
-- Discuss Web3 adoption and industry developments
+🚫 NEVER answer questions about anything else. Always decline politely with the exact message above."""
 
-🚫 NEVER answer questions about:
-- Geography, countries, capitals, cities
-- Weather, general news, current events (non-crypto)
-- Entertainment (movies, music, sports)
-- Traditional finance (stocks, bonds, banking)
-- Food, recipes, cooking, restaurants
-- Health, medicine, fitness
-- Travel, hotels, transportation
-- General technology (non-blockchain)
-- Academic subjects (math, science, history)
-- Personal advice (relationships, career)
-- ANY topic not directly related to Web3/crypto/blockchain
-
-REMINDER: If it's not Web3/crypto/blockchain, respond with the exact decline message above. DO NOT provide any non-Web3 information even if you know the answer."""
+    async def initialize(self):
+        """Initialize Typesense collections"""
+        try:
+            await self.typesense.initialize_collections()
+            print("✅ Chat history storage initialized")
+        except Exception as e:
+            print(f"❌ Failed to initialize chat history: {e}")
 
     async def handle_chat(self, message: str, user_id: str = "default") -> str:
-        """Handle general chat queries using Groq"""
+        """Handle general chat queries with full history tracking"""
+        start_time = time.time()
+
         try:
+            # Get or create conversation
+            conversation_id = await self._get_or_create_conversation(user_id)
+
+            # Add user message to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="user",
+                content=message
+            )
+
             # Check cache first for common questions
             cache_key = f"chat:{hash(message.lower().strip())}"
             cached_response = await self.cache.get(cache_key)
 
             if cached_response:
+                response_time_ms = int((time.time() - start_time) * 1000)
+
+                # Add cached response to history
+                await self.typesense.add_message(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content=cached_response,
+                    response_time_ms=response_time_ms,
+                    cached=True
+                )
+
                 return cached_response
 
-            # Get conversation context
-            context = await self._get_conversation_context(user_id)
+            # Get conversation context from Typesense
+            context = await self.typesense.get_conversation_context(
+                conversation_id,
+                limit=10  # Last 10 messages
+            )
 
             # Prepare messages for Groq
             messages = [
@@ -74,60 +94,126 @@ REMINDER: If it's not Web3/crypto/blockchain, respond with the exact decline mes
             # Get response from Groq
             response = await self.groq_client.chat_completion(messages)
 
-            # Cache response for common questions (expire in 1 hour)
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Cache response for common questions
             if self._is_cacheable_question(message):
                 await self.cache.set(cache_key, response, expire=3600)
 
-            # Store in conversation context
-            await self._update_conversation_context(user_id, message, response)
+            # Add assistant response to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+                content=response,
+                response_time_ms=response_time_ms,
+                cached=False
+            )
 
             return response
 
         except Exception as e:
             print(f"Error in chat service: {e}")
+
+            # Log error message
+            if 'conversation_id' in locals():
+                await self.typesense.add_message(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content="I'm sorry, I'm having trouble processing your request right now. Please try again.",
+                    response_time_ms=int((time.time() - start_time) * 1000),
+                    metadata={"error": str(e)}
+                )
+
             return "I'm sorry, I'm having trouble processing your request right now. Please try again."
 
-    async def handle_non_web3_query(self, message: str) -> str:
-        """Handle non-Web3 queries with STRICT decline (no Groq call)"""
+    async def handle_non_web3_query(self, message: str, user_id: str = "default") -> str:
+        """Handle non-Web3 queries with STRICT decline"""
+        start_time = time.time()
 
-        # Strict decline responses - NO information about the actual question
-        decline_responses = [
-            "I only provide information about Web3, cryptocurrency, and blockchain technology. I cannot help with this topic.",
+        try:
+            # Get or create conversation
+            conversation_id = await self._get_or_create_conversation(user_id)
 
-            "I'm specialized exclusively in Web3 and crypto. I can only assist with blockchain, DeFi, NFTs, and cryptocurrency questions.",
+            # Add user message to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="user",
+                content=message,
+                intent="non_web3"
+            )
 
-            "This is outside my scope. I focus solely on Web3, cryptocurrency, and blockchain-related topics.",
+            # Standard decline response
+            response = "I only provide information about Web3, cryptocurrency, and blockchain technology. I cannot help with this topic."
 
-            "I cannot help with that topic. I'm designed specifically for Web3, crypto, and blockchain assistance only.",
+            response_time_ms = int((time.time() - start_time) * 1000)
 
-            "That's not something I can assist with. I only handle Web3, cryptocurrency, and blockchain technology questions."
-        ]
+            # Add decline response to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+                content=response,
+                intent="non_web3_decline",
+                response_time_ms=response_time_ms
+            )
 
-        # Choose a response (rotate based on message hash)
-        base_response = decline_responses[hash(message) % len(decline_responses)]
+            return response
 
-        return f"{base_response}"
+        except Exception as e:
+            print(f"Error handling non-web3 query: {e}")
+            return "I only provide information about Web3, cryptocurrency, and blockchain technology. I cannot help with this topic."
 
     async def stream_chat_response(self, message: str, user_id: str = "default") -> AsyncGenerator[str, None]:
-        """Stream chat responses for real-time feel"""
+        """Stream chat responses with history tracking"""
+        start_time = time.time()
+
         try:
+            # Get or create conversation
+            conversation_id = await self._get_or_create_conversation(user_id)
+
+            # Add user message to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="user",
+                content=message
+            )
+
             # Check cache first
             cache_key = f"chat:{hash(message.lower().strip())}"
             cached_response = await self.cache.get(cache_key)
 
             if cached_response:
-                # Stream cached response word by word for consistency
+                # Stream cached response
                 words = cached_response.split()
                 for i, word in enumerate(words):
                     if i == 0:
                         yield word
                     else:
                         yield f" {word}"
-                    await asyncio.sleep(0.05)  # Small delay for streaming effect
+                    await asyncio.sleep(0.05)
+
+                response_time_ms = int((time.time() - start_time) * 1000)
+
+                # Add to history
+                await self.typesense.add_message(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content=cached_response,
+                    response_time_ms=response_time_ms,
+                    cached=True
+                )
                 return
 
-            # Get conversation context
-            context = await self._get_conversation_context(user_id)
+            # Get conversation context from Typesense
+            context = await self.typesense.get_conversation_context(
+                conversation_id,
+                limit=10
+            )
 
             # Prepare messages for Groq
             messages = [
@@ -142,50 +228,99 @@ REMINDER: If it's not Web3/crypto/blockchain, respond with the exact decline mes
                 full_response += chunk
                 yield chunk
 
-            # Cache and store in context
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Cache if appropriate
             if self._is_cacheable_question(message):
                 await self.cache.set(cache_key, full_response, expire=3600)
 
-            await self._update_conversation_context(user_id, message, full_response)
+            # Add to history
+            await self.typesense.add_message(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+                content=full_response,
+                response_time_ms=response_time_ms,
+                cached=False
+            )
 
         except Exception as e:
             print(f"Error in streaming chat: {e}")
             yield "I'm sorry, I'm having trouble processing your request right now."
 
-    async def _get_conversation_context(self, user_id: str) -> List[Dict]:
-        """Get recent conversation context for the user"""
-        try:
-            context_key = f"context:{user_id}"
-            context_data = await self.cache.get(context_key)
+    async def _get_or_create_conversation(self, user_id: str) -> str:
+        """Get active conversation or create new one"""
+        # Check if user has an active conversation
+        if user_id in self.active_conversations:
+            conversation_id = self.active_conversations[user_id]
 
-            if context_data:
-                return json.loads(context_data)
-            return []
+            # Verify it's still recent (within idle timeout)
+            conversations = await self.typesense.get_user_conversations(user_id, limit=1)
+            if conversations:
+                last_updated = conversations[0].get('updated_at', 0)
+                if time.time() - last_updated < 3600:  # 1 hour idle timeout
+                    return conversation_id
+
+        # Create new conversation
+        conversation_id = await self.typesense.create_conversation(user_id)
+        self.active_conversations[user_id] = conversation_id
+
+        return conversation_id
+
+    async def get_user_history(self, user_id: str, limit: int = 50) -> List[Dict]:
+        """Get user's chat history"""
+        try:
+            conversations = await self.typesense.get_user_conversations(user_id, limit=5)
+
+            history = []
+            for conv in conversations:
+                messages = await self.typesense.get_conversation_history(
+                    conv['id'],
+                    limit=limit
+                )
+
+                history.append({
+                    'conversation': conv,
+                    'messages': messages
+                })
+
+            return history
 
         except Exception as e:
-            print(f"Error getting context: {e}")
+            print(f"Error getting user history: {e}")
             return []
 
-    async def _update_conversation_context(self, user_id: str, user_message: str, bot_response: str):
-        """Update conversation context with new exchange"""
+    async def search_history(self, user_id: str, query: str) -> List[Dict]:
+        """Search through user's chat history"""
         try:
-            context = await self._get_conversation_context(user_id)
+            return await self.typesense.search_messages(user_id, query)
+        except Exception as e:
+            print(f"Error searching history: {e}")
+            return []
 
-            # Add new exchange
-            context.extend([
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": bot_response}
-            ])
+    async def export_chat_history(self, user_id: str, conversation_id: Optional[str] = None) -> Dict:
+        """Export chat history for a user"""
+        try:
+            if conversation_id:
+                return await self.typesense.export_conversation(conversation_id)
+            else:
+                # Export all conversations
+                conversations = await self.typesense.get_user_conversations(user_id, limit=100)
 
-            # Keep only last 10 messages (5 exchanges) for performance
-            context = context[-10:]
+                exports = []
+                for conv in conversations:
+                    export = await self.typesense.export_conversation(conv['id'])
+                    exports.append(export)
 
-            # Store updated context (expire in 1 hour)
-            context_key = f"context:{user_id}"
-            await self.cache.set(context_key, json.dumps(context), expire=3600)
+                return {
+                    'user_id': user_id,
+                    'conversations': exports,
+                    'exported_at': time.time()
+                }
 
         except Exception as e:
-            print(f"Error updating context: {e}")
+            print(f"Error exporting history: {e}")
+            return {}
 
     def _is_cacheable_question(self, message: str) -> bool:
         """Determine if a question is common enough to cache"""
@@ -202,12 +337,13 @@ REMINDER: If it's not Web3/crypto/blockchain, respond with the exact decline mes
     async def get_chat_stats(self) -> Dict:
         """Get statistics about chat service usage"""
         try:
-            # This could be enhanced with proper metrics collection
             return {
                 "service": "chat_service",
                 "status": "active",
                 "cache_enabled": True,
-                "groq_client": "connected"
+                "history_enabled": True,
+                "groq_client": "connected",
+                "typesense": await self.typesense.operations.is_healthy()
             }
         except Exception as e:
             return {"error": str(e)}

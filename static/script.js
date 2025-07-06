@@ -1,4 +1,4 @@
-class FastChatbot {
+class EnhancedChatbot {
     constructor() {
         this.chatMessages = document.getElementById('chatMessages');
         this.chatForm = document.getElementById('chatForm');
@@ -7,12 +7,31 @@ class FastChatbot {
         this.typingIndicator = document.getElementById('typingIndicator');
         this.statusText = document.getElementById('status-text');
         this.responseTimeElement = document.getElementById('response-time');
+        this.conversationIdElement = document.getElementById('conversation-id');
+        this.conversationsList = document.getElementById('conversationsList');
+        this.searchBox = document.getElementById('searchBox');
 
         this.isProcessing = false;
         this.messageCount = 0;
+        this.currentConversationId = null;
+        this.userId = this.getUserId();
+        this.conversations = [];
+        this.userStats = null;
 
         this.initializeEventListeners();
-        this.checkHealth();
+        this.initialize();
+    }
+
+    async initialize() {
+        // Display user ID
+        document.getElementById('userIdDisplay').textContent = `User: ${this.userId}`;
+
+        // Check health
+        await this.checkHealth();
+
+        // Load user data
+        await this.loadUserStats();
+        await this.loadConversations();
     }
 
     initializeEventListeners() {
@@ -26,6 +45,10 @@ class FastChatbot {
                 e.preventDefault();
                 this.handleSendMessage();
             }
+        });
+
+        this.searchBox.addEventListener('input', (e) => {
+            this.searchConversations(e.target.value);
         });
 
         // Auto-resize input
@@ -42,7 +65,7 @@ class FastChatbot {
         this.isProcessing = true;
         this.updateUI(true);
 
-        // Add user message
+        // Add user message to UI
         this.addMessage(message, 'user');
 
         // Clear input
@@ -75,7 +98,8 @@ class FastChatbot {
                 },
                 body: JSON.stringify({
                     message: message,
-                    user_id: this.getUserId()
+                    user_id: this.userId,
+                    conversation_id: this.currentConversationId
                 })
             });
 
@@ -114,6 +138,13 @@ class FastChatbot {
                                     intent = data.intent;
                                     break;
 
+                                case 'conversation_id':
+                                    if (!this.currentConversationId) {
+                                        this.currentConversationId = data.conversation_id;
+                                        this.conversationIdElement.textContent = `Conv: ${data.conversation_id.slice(0, 8)}...`;
+                                    }
+                                    break;
+
                                 case 'content':
                                     if (!botMessageElement) {
                                         botMessageElement = this.addMessage('', 'bot');
@@ -126,6 +157,9 @@ class FastChatbot {
                                     const responseTime = Date.now() - startTime;
                                     this.updateResponseTime(responseTime);
                                     this.updateMessageInfo(botMessageElement, intent, responseTime);
+
+                                    // Refresh conversations list
+                                    await this.loadConversations();
                                     break;
 
                                 case 'error':
@@ -146,9 +180,169 @@ class FastChatbot {
         }
     }
 
-    addMessage(content, sender, type = 'normal') {
+    async loadConversations() {
+        try {
+            const response = await fetch(`/api/conversations?user_id=${this.userId}&limit=20`);
+            const data = await response.json();
+
+            this.conversations = data.conversations || [];
+            this.renderConversations();
+
+        } catch (error) {
+            console.error('Error loading conversations:', error);
+        }
+    }
+
+    renderConversations() {
+        const listElement = this.conversationsList;
+        listElement.innerHTML = '';
+
+        if (this.conversations.length === 0) {
+            listElement.innerHTML = '<p style="text-align: center; color: #6c757d;">No conversations yet</p>';
+            return;
+        }
+
+        this.conversations.forEach(conv => {
+            const item = document.createElement('div');
+            item.className = 'conversation-item';
+            if (conv.id === this.currentConversationId) {
+                item.className += ' active';
+            }
+
+            const title = conv.title || 'Untitled Conversation';
+            const date = new Date(conv.updated_at * 1000).toLocaleString();
+            const messageCount = conv.message_count || 0;
+
+            item.innerHTML = `
+                <div class="conversation-title">${title}</div>
+                <div class="conversation-meta">
+                    ${messageCount} messages • ${date}
+                </div>
+            `;
+
+            item.onclick = () => this.loadConversation(conv.id);
+
+            listElement.appendChild(item);
+        });
+    }
+
+    async loadConversation(conversationId) {
+        try {
+            const response = await fetch(`/api/conversations/${conversationId}/messages?limit=100`);
+            const data = await response.json();
+
+            // Clear current messages
+            this.chatMessages.innerHTML = '';
+
+            // Set current conversation
+            this.currentConversationId = conversationId;
+            this.conversationIdElement.textContent = `Conv: ${conversationId.slice(0, 8)}...`;
+
+            // Add messages
+            data.messages.forEach(msg => {
+                if (msg.role === 'user' || msg.role === 'assistant') {
+                    const element = this.addMessage(
+                        msg.content,
+                        msg.role === 'user' ? 'user' : 'bot',
+                        msg.error ? 'error' : 'normal',
+                        false
+                    );
+
+                    // Update message info
+                    const timestamp = new Date(msg.timestamp * 1000);
+                    const infoElement = element.querySelector('.message-info');
+                    infoElement.textContent = `${msg.role === 'user' ? 'You' : 'Bot'} • ${this.formatTime(timestamp)}`;
+                }
+            });
+
+            // Add typing indicator back
+            this.chatMessages.appendChild(this.typingIndicator);
+
+            // Update active state
+            this.renderConversations();
+
+            // Scroll to bottom
+            this.scrollToBottom();
+
+        } catch (error) {
+            console.error('Error loading conversation:', error);
+        }
+    }
+
+    async loadUserStats() {
+        try {
+            const response = await fetch(`/api/users/${this.userId}/stats`);
+            this.userStats = await response.json();
+
+            // Update stats display
+            document.getElementById('totalConversations').textContent = this.userStats.total_conversations || 0;
+            document.getElementById('totalMessages').textContent = this.userStats.total_messages || 0;
+
+            if (this.userStats.created_at) {
+                const createdDate = new Date(this.userStats.created_at * 1000).toLocaleDateString();
+                document.getElementById('memberSince').textContent = createdDate;
+            }
+
+            if (this.userStats.last_active) {
+                const lastActiveDate = new Date(this.userStats.last_active * 1000).toLocaleString();
+                document.getElementById('lastActive').textContent = lastActiveDate;
+            }
+
+            // Display common intents
+            if (this.userStats.common_intents && this.userStats.common_intents.length > 0) {
+                const intentsHtml = `
+                    <h3 style="margin-top: 20px; margin-bottom: 10px;">Common Topics</h3>
+                    ${this.userStats.common_intents.map(intent =>
+                        `<span style="display: inline-block; padding: 5px 10px; margin: 2px; background: #e9ecef; border-radius: 15px; font-size: 0.8rem;">${intent}</span>`
+                    ).join('')}
+                `;
+                document.getElementById('commonIntents').innerHTML = intentsHtml;
+            }
+
+        } catch (error) {
+            console.error('Error loading user stats:', error);
+        }
+    }
+
+    async searchConversations(query) {
+        if (!query) {
+            this.renderConversations();
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    user_id: this.userId,
+                    query: query
+                })
+            });
+
+            const data = await response.json();
+
+            // Filter conversations based on search results
+            const matchingConvIds = new Set(data.results.map(r => r.conversation_id));
+            const filteredConversations = this.conversations.filter(c => matchingConvIds.has(c.id));
+
+            // Temporarily update the display
+            this.conversations = filteredConversations;
+            this.renderConversations();
+
+        } catch (error) {
+            console.error('Error searching:', error);
+        }
+    }
+
+    addMessage(content, sender, type = 'normal', animate = true) {
         const messageElement = document.createElement('div');
         messageElement.className = `message ${sender}`;
+        if (!animate) {
+            messageElement.style.animation = 'none';
+        }
 
         const contentElement = document.createElement('div');
         contentElement.className = 'message-content';
@@ -272,42 +466,86 @@ class FastChatbot {
             this.statusText.style.color = '#dc3545';
         }
     }
+}
 
-    // Alternative non-streaming method (fallback)
-    async sendRegularMessage(message) {
-        const startTime = Date.now();
+// Global functions for UI actions
+function switchTab(tabName) {
+    const conversationsTab = document.getElementById('conversationsTab');
+    const statsTab = document.getElementById('statsTab');
+    const tabs = document.querySelectorAll('.sidebar-tab');
 
-        try {
-            const response = await fetch('/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    message: message,
-                    user_id: this.getUserId()
-                })
-            });
+    tabs.forEach(tab => tab.classList.remove('active'));
 
-            const data = await response.json();
+    if (tabName === 'conversations') {
+        conversationsTab.style.display = 'block';
+        statsTab.style.display = 'none';
+        tabs[0].classList.add('active');
+    } else {
+        conversationsTab.style.display = 'none';
+        statsTab.style.display = 'block';
+        tabs[1].classList.add('active');
 
-            this.hideTyping();
-
-            const responseTime = Date.now() - startTime;
-            this.updateResponseTime(responseTime);
-
-            const botMessage = this.addMessage(data.response, 'bot');
-            this.updateMessageInfo(botMessage, data.intent, data.response_time * 1000);
-
-        } catch (error) {
-            this.hideTyping();
-            this.addMessage('Sorry, I encountered an error. Please try again.', 'bot', 'error');
-            throw error;
+        // Refresh stats when switching to stats tab
+        if (window.chatbotInstance) {
+            window.chatbotInstance.loadUserStats();
         }
     }
 }
 
-// Demo button functionality
+async function exportHistory() {
+    if (!window.chatbotInstance) return;
+
+    try {
+        const userId = window.chatbotInstance.userId;
+        const response = await fetch(`/api/export/user/${userId}`);
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `chat_history_${userId}_${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            alert('Chat history exported successfully!');
+        }
+    } catch (error) {
+        console.error('Export error:', error);
+        alert('Failed to export chat history');
+    }
+}
+
+async function clearHistory() {
+    if (!window.chatbotInstance) return;
+
+    if (!confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+        return;
+    }
+
+    try {
+        const conversations = window.chatbotInstance.conversations;
+
+        for (const conv of conversations) {
+            await fetch(`/api/conversations/${conv.id}`, {
+                method: 'DELETE'
+            });
+        }
+
+        // Clear local storage
+        localStorage.removeItem('chatbot_user_id');
+
+        // Reload the page
+        window.location.reload();
+
+    } catch (error) {
+        console.error('Clear history error:', error);
+        alert('Failed to clear chat history');
+    }
+}
+
 function sendDemoMessage(message) {
     const chatbot = window.chatbotInstance;
     if (chatbot && !chatbot.isProcessing) {
@@ -318,11 +556,11 @@ function sendDemoMessage(message) {
 
 // Initialize chatbot when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    window.chatbotInstance = new FastChatbot();
+    window.chatbotInstance = new EnhancedChatbot();
 
-    // Optional: Add some demo data
-    console.log('🤖 Fast Web3 Chatbot initialized!');
-    console.log('💡 Features: Streaming responses, intent detection, Redis caching');
+    console.log('🤖 Enhanced Web3 Chatbot with History initialized!');
+    console.log('💡 Features: Chat history, search, export, statistics');
+    console.log('🗄️ Storage: Typesense for fast search and retrieval');
 });
 
 // Utility functions for development/debugging
@@ -340,6 +578,22 @@ window.chatDebug = {
 
     getMetrics: async () => {
         const response = await fetch('/metrics');
+        return await response.json();
+    },
+
+    getUserStats: async () => {
+        const userId = window.chatbotInstance.userId;
+        const response = await fetch(`/api/users/${userId}/stats`);
+        return await response.json();
+    },
+
+    searchHistory: async (query) => {
+        const userId = window.chatbotInstance.userId;
+        const response = await fetch('/api/search', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user_id: userId, query: query})
+        });
         return await response.json();
     },
 

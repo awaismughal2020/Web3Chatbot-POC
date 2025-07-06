@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web3 Fast Chatbot</title>
+    <title>Web3 Fast Chatbot - With History</title>
     <style>
         * {
             margin: 0;
@@ -20,10 +20,110 @@
             align-items: center;
         }
 
-        .chat-container {
-            width: 90%;
-            max-width: 800px;
+        .app-container {
+            width: 95%;
+            max-width: 1400px;
             height: 90vh;
+            display: flex;
+            gap: 20px;
+        }
+
+        /* Sidebar for History */
+        .sidebar {
+            width: 300px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .sidebar-header h2 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+        }
+
+        .sidebar-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .sidebar-tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .sidebar-tab.active {
+            background: white;
+            border-bottom: 2px solid #667eea;
+            color: #667eea;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+        }
+
+        .conversation-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .conversation-item:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .conversation-item.active {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .conversation-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .conversation-meta {
+            font-size: 0.8rem;
+            color: #6c757d;
+        }
+
+        .search-box {
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 20px;
+            width: 100%;
+            font-size: 0.9rem;
+        }
+
+        /* Main Chat Container */
+        .chat-container {
+            flex: 1;
             background: white;
             border-radius: 20px;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
@@ -92,6 +192,18 @@
             margin-bottom: 20px;
             display: flex;
             gap: 10px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .message.user {
@@ -253,95 +365,220 @@
             border-color: #f5c6cb !important;
         }
 
+        /* Action buttons */
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .action-button {
+            flex: 1;
+            padding: 10px;
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+
+        .action-button:hover {
+            background: #f8f9fa;
+            border-color: #667eea;
+        }
+
+        /* User stats */
+        .user-stats {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.8rem;
+        }
+
+        .stat-label {
+            color: #6c757d;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #333;
+        }
+
         /* Responsive design */
+        @media (max-width: 1024px) {
+            .app-container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                height: 200px;
+            }
+
+            .sidebar-content {
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+            }
+        }
+
         @media (max-width: 768px) {
+            .app-container {
+                width: 100%;
+                height: 100vh;
+                gap: 0;
+            }
+
+            .sidebar {
+                display: none;
+            }
+
             .chat-container {
-                width: 95%;
-                height: 95vh;
-                border-radius: 10px;
-            }
-
-            .chat-header {
-                border-radius: 10px 10px 0 0;
-                padding: 15px;
-            }
-
-            .chat-header h1 {
-                font-size: 1.2rem;
+                border-radius: 0;
             }
 
             .message-content {
                 max-width: 85%;
-                padding: 12px 15px;
             }
+        }
 
-            .chat-input-container {
-                padding: 15px;
-            }
+        /* Loading spinner */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 1s ease-in-out infinite;
+        }
 
-            .demo-buttons {
-                flex-direction: column;
-            }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="chat-container">
-        <div class="chat-header">
-            <h1>Web3 Fast Chatbot</h1>
-            <p>Ask about crypto prices or Web3 concepts</p>
-        </div>
-
-        <div class="status-bar">
-            <div class="status-indicator">
-                <div class="status-dot"></div>
-                <span id="status-text">Connected</span>
-            </div>
-            <div id="response-time">Response time: --</div>
-        </div>
-
-        <div class="chat-messages" id="chatMessages">
-            <div class="message bot">
-                <div class="message-content">
-                    👋 Welcome! I'm your Web3 assistant. I can help you with:
-                    <br>• Real-time cryptocurrency prices
-                    <br>• Web3 and blockchain concepts
-                    <br>• DeFi and NFT information
-                    <br><br>Try asking "What's the price of Bitcoin?" or "What is DeFi?"
-                </div>
-                <div class="message-info">
-                    System • Now
-                </div>
+    <div class="app-container">
+        <!-- Sidebar for History -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2>Chat History</h2>
+                <div id="userIdDisplay" style="font-size: 0.8rem; opacity: 0.8;"></div>
             </div>
 
-            <div class="typing-indicator" id="typingIndicator">
-                <div class="typing-dots">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" onclick="switchTab('conversations')">Conversations</button>
+                <button class="sidebar-tab" onclick="switchTab('stats')">Statistics</button>
+            </div>
+
+            <div class="sidebar-content" id="sidebarContent">
+                <!-- Conversations Tab -->
+                <div id="conversationsTab">
+                    <input type="text" class="search-box" placeholder="Search conversations..." id="searchBox">
+                    <div id="conversationsList"></div>
                 </div>
-                <span>Thinking...</span>
+
+                <!-- Stats Tab -->
+                <div id="statsTab" style="display: none;">
+                    <div class="user-stats" id="userStats">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Conversations:</span>
+                            <span class="stat-value" id="totalConversations">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Total Messages:</span>
+                            <span class="stat-value" id="totalMessages">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Member Since:</span>
+                            <span class="stat-value" id="memberSince">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Last Active:</span>
+                            <span class="stat-value" id="lastActive">-</span>
+                        </div>
+                    </div>
+                    <div id="commonIntents"></div>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="action-button" onclick="exportHistory()">📥 Export</button>
+                <button class="action-button" onclick="clearHistory()">🗑️ Clear</button>
             </div>
         </div>
 
-        <div class="chat-input-container">
-            <form class="chat-input-form" id="chatForm">
-                <input
-                    type="text"
-                    class="chat-input"
-                    id="chatInput"
-                    placeholder="Ask about crypto prices or Web3..."
-                    autocomplete="off"
-                >
-                <button type="submit" class="send-button" id="sendButton">Send</button>
-            </form>
+        <!-- Main Chat Container -->
+        <div class="chat-container">
+            <div class="chat-header">
+                <h1>Web3 Fast Chatbot</h1>
+                <p>Ask about crypto prices or Web3 concepts - Now with History!</p>
+            </div>
 
-            <div class="demo-buttons">
-                <button class="demo-button" onclick="sendDemoMessage('What is the price of Bitcoin?')">BTC Price</button>
-                <button class="demo-button" onclick="sendDemoMessage('Ethereum price')">ETH Price</button>
-                <button class="demo-button" onclick="sendDemoMessage('What is DeFi?')">What is DeFi?</button>
-                <button class="demo-button" onclick="sendDemoMessage('Explain blockchain')">Explain Blockchain</button>
-                <button class="demo-button" onclick="sendDemoMessage('What are NFTs?')">What are NFTs?</button>
+            <div class="status-bar">
+                <div class="status-indicator">
+                    <div class="status-dot"></div>
+                    <span id="status-text">Connected</span>
+                    <span id="conversation-id" style="margin-left: 10px; font-size: 0.7rem;"></span>
+                </div>
+                <div id="response-time">Response time: --</div>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="message bot">
+                    <div class="message-content">
+                        👋 Welcome! I'm your Web3 assistant with chat history.
+                        <br><br>I can help you with:
+                        <br>• Real-time cryptocurrency prices
+                        <br>• Web3 and blockchain concepts
+                        <br>• DeFi and NFT information
+                        <br><br>Your conversations are saved for future reference!
+                    </div>
+                    <div class="message-info">
+                        System • Now
+                    </div>
+                </div>
+
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="typing-dots">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                    </div>
+                    <span>Thinking...</span>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <form class="chat-input-form" id="chatForm">
+                    <input
+                        type="text"
+                        class="chat-input"
+                        id="chatInput"
+                        placeholder="Ask about crypto prices or Web3..."
+                        autocomplete="off"
+                    >
+                    <button type="submit" class="send-button" id="sendButton">Send</button>
+                </form>
+
+                <div class="demo-buttons">
+                    <button class="demo-button" onclick="sendDemoMessage('What is the price of Bitcoin?')">BTC Price</button>
+                    <button class="demo-button" onclick="sendDemoMessage('Ethereum price')">ETH Price</button>
+                    <button class="demo-button" onclick="sendDemoMessage('What is DeFi?')">What is DeFi?</button>
+                    <button class="demo-button" onclick="sendDemoMessage('Explain blockchain')">Explain Blockchain</button>
+                    <button class="demo-button" onclick="sendDemoMessage('What are NFTs?')">What are NFTs?</button>
+                </div>
             </div>
         </div>
     </div>

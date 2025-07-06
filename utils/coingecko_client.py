@@ -13,7 +13,7 @@ class CoinGeckoClient:
 
         # Use pro API if key is available
         self.use_pro = bool(self.api_key)
-        self.current_url = self.pro_url if self.use_pro else self.base_url
+        self.current_url = self.base_url
 
     async def _get_session(self):
         """Get or create HTTP session"""
