@@ -56,8 +56,13 @@ class ChatService:
                     print("⚠️ Chat history initialization failed, continuing without history")
                     return False
 
-    async def get_or_create_conversation(self, user_id: str, title: Optional[str] = None) -> str:
+    async def get_or_create_conversation(self, user_id: str, title: Optional[str] = None,
+                                         force_new: bool = False) -> str:
         """Get existing active conversation or create new one"""
+        # If force_new is True, always create a new conversation
+        if force_new:
+            return await self._create_new_conversation(user_id, title)
+
         # Check if user has an active conversation in memory
         if user_id in self.active_conversations:
             conv_id = self.active_conversations[user_id]
@@ -67,18 +72,27 @@ class ChatService:
                 conversations = await self.typesense.get_user_conversations(user_id, limit=1, status='active')
                 if conversations and conversations[0]['id'] == conv_id:
                     last_updated = conversations[0].get('updated_at', 0)
-                    if time.time() - last_updated < 3600:  # Active within last hour
+                    # If the conversation is less than 1 hour old, reuse it
+                    if time.time() - last_updated < 3600:
                         return conv_id
             except:
                 pass
 
         # Create new conversation
+        return await self._create_new_conversation(user_id, title)
+
+    async def _create_new_conversation(self, user_id: str, title: Optional[str] = None) -> str:
+        """Create a new conversation"""
         try:
             if not title:
                 title = f"Chat {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
             conversation_id = await self.typesense.create_conversation(user_id, title)
             self.active_conversations[user_id] = conversation_id
+
+            # Clean up old conversations periodically
+            await self.cleanup_old_conversations(user_id)
+
             return conversation_id
 
         except Exception as e:
@@ -93,10 +107,20 @@ class ChatService:
         start_time = time.time()
 
         try:
-            # Use provided conversation ID or get/create one
+            # If no conversation_id provided, get or create one
             if not conversation_id:
                 conversation_id = await self.get_or_create_conversation(user_id)
             else:
+                # Verify the conversation exists and belongs to the user
+                try:
+                    conversations = await self.typesense.get_user_conversations(user_id, limit=100)
+                    if not any(c['id'] == conversation_id for c in conversations):
+                        # Conversation doesn't exist or doesn't belong to user, create new one
+                        conversation_id = await self.get_or_create_conversation(user_id, force_new=True)
+                except:
+                    # If we can't verify, create a new conversation to be safe
+                    conversation_id = await self.get_or_create_conversation(user_id, force_new=True)
+
                 # Update active conversation mapping
                 self.active_conversations[user_id] = conversation_id
 
@@ -189,10 +213,20 @@ class ChatService:
         start_time = time.time()
 
         try:
-            # Use provided conversation ID or get/create one
+            # If no conversation_id provided, get or create one
             if not conversation_id:
                 conversation_id = await self.get_or_create_conversation(user_id)
             else:
+                # Verify the conversation exists and belongs to the user
+                try:
+                    conversations = await self.typesense.get_user_conversations(user_id, limit=100)
+                    if not any(c['id'] == conversation_id for c in conversations):
+                        # Conversation doesn't exist or doesn't belong to user, create new one
+                        conversation_id = await self.get_or_create_conversation(user_id, force_new=True)
+                except:
+                    # If we can't verify, create a new conversation to be safe
+                    conversation_id = await self.get_or_create_conversation(user_id, force_new=True)
+
                 self.active_conversations[user_id] = conversation_id
 
             # Yield conversation ID first
@@ -340,9 +374,7 @@ class ChatService:
     async def update_conversation_title(self, conversation_id: str, title: str) -> bool:
         """Update conversation title"""
         try:
-            # This would need to be implemented in TypesenseClient
-            # For now, return True as placeholder
-            return True
+            return await self.typesense.update_conversation_title(conversation_id, title)
         except Exception as e:
             print(f"Error updating conversation title: {e}")
             return False

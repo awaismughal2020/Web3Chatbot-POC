@@ -104,6 +104,8 @@ async def serve_frontend():
     return FileResponse("static/index.html")
 
 
+# This is a partial update for main.py - just the chat endpoint
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     """Synchronous chat endpoint with conversation management"""
@@ -113,9 +115,22 @@ async def chat_endpoint(request: ChatRequest):
         # Detect intent
         intent = await intent_detector.detect_intent(request.message)
 
-        # Get or create conversation
-        if not request.conversation_id:
-            request.conversation_id = await chat_service.get_or_create_conversation(request.user_id)
+        # Handle conversation creation/selection
+        conversation_id = request.conversation_id
+
+        # If no conversation_id is provided, let the chat service handle it
+        if not conversation_id:
+            # For initial greeting messages that create new conversations
+            if "ready to help" in request.message.lower():
+                conversation_id = await chat_service.get_or_create_conversation(
+                    request.user_id,
+                    force_new=True  # Force new conversation for greeting
+                )
+            else:
+                conversation_id = await chat_service.get_or_create_conversation(request.user_id)
+
+        # Store the conversation_id for response
+        final_conversation_id = conversation_id
 
         # Route based on intent
         if intent == "price_query":
@@ -123,14 +138,14 @@ async def chat_endpoint(request: ChatRequest):
 
             # Save price queries to history too
             await typesense_client.add_message(
-                conversation_id=request.conversation_id,
+                conversation_id=final_conversation_id,
                 user_id=request.user_id,
                 role="user",
                 content=request.message,
                 intent=intent
             )
             await typesense_client.add_message(
-                conversation_id=request.conversation_id,
+                conversation_id=final_conversation_id,
                 user_id=request.user_id,
                 role="assistant",
                 content=response,
@@ -141,6 +156,23 @@ async def chat_endpoint(request: ChatRequest):
         elif intent == "wallet_query":
             response = "🔒 Wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
 
+            # Save to history
+            await typesense_client.add_message(
+                conversation_id=final_conversation_id,
+                user_id=request.user_id,
+                role="user",
+                content=request.message,
+                intent=intent
+            )
+            await typesense_client.add_message(
+                conversation_id=final_conversation_id,
+                user_id=request.user_id,
+                role="assistant",
+                content=response,
+                intent=intent,
+                response_time_ms=int((time.time() - start_time) * 1000)
+            )
+
         elif intent == "non_web3":
             response = await chat_service.handle_non_web3_query(request.message, request.user_id)
 
@@ -148,7 +180,7 @@ async def chat_endpoint(request: ChatRequest):
             response = await chat_service.handle_chat(
                 request.message,
                 request.user_id,
-                request.conversation_id
+                final_conversation_id
             )
 
         response_time = time.time() - start_time
@@ -157,7 +189,7 @@ async def chat_endpoint(request: ChatRequest):
             response=response,
             intent=intent,
             response_time=round(response_time, 3),
-            conversation_id=request.conversation_id
+            conversation_id=final_conversation_id
         )
 
     except Exception as e:
@@ -180,11 +212,17 @@ async def chat_stream_endpoint(request: StreamChatRequest):
             intent = await intent_detector.detect_intent(request.message)
             yield f"data: {json.dumps({'type': 'intent', 'intent': intent})}\n\n"
 
-            # Get or create conversation
-            if not request.conversation_id:
+            # Handle conversation creation/selection
+            conversation_id = request.conversation_id
+
+            # If this is a greeting message for new chat, force new conversation
+            if not conversation_id and "ready to help" in request.message.lower():
+                conversation_id = await chat_service.get_or_create_conversation(
+                    request.user_id,
+                    force_new=True
+                )
+            elif not conversation_id:
                 conversation_id = await chat_service.get_or_create_conversation(request.user_id)
-            else:
-                conversation_id = request.conversation_id
 
             yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conversation_id})}\n\n"
 
@@ -216,9 +254,30 @@ async def chat_stream_endpoint(request: StreamChatRequest):
 
             elif intent == "wallet_query":
                 wallet_msg = "🔒 Wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
+
+                # Save user message
+                await typesense_client.add_message(
+                    conversation_id=conversation_id,
+                    user_id=request.user_id,
+                    role="user",
+                    content=request.message,
+                    intent=intent
+                )
+
+                # Stream the response
                 for word in wallet_msg.split():
                     yield f"data: {json.dumps({'type': 'content', 'content': word + ' '})}\n\n"
                     await asyncio.sleep(0.03)
+
+                # Save assistant response
+                await typesense_client.add_message(
+                    conversation_id=conversation_id,
+                    user_id=request.user_id,
+                    role="assistant",
+                    content=wallet_msg,
+                    intent=intent,
+                    response_time_ms=int((time.time() - start_time) * 1000)
+                )
 
             elif intent == "non_web3":
                 response = await chat_service.handle_non_web3_query(request.message, request.user_id)

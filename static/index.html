@@ -688,6 +688,7 @@
                 this.conversations = [];
                 this.isLoading = false;
                 this.messageCache = new Map();
+                this.isCreatingNewChat = false;
 
                 this.initializeElements();
                 this.initializeEventListeners();
@@ -714,7 +715,7 @@
                 this.elements.chatForm.addEventListener('submit', (e) => {
                     e.preventDefault();
                     const message = this.elements.chatInput.value.trim();
-                    if (message) {
+                    if (message && !this.isLoading && !this.isCreatingNewChat) {
                         this.sendMessage(message);
                     }
                 });
@@ -743,12 +744,10 @@
                 this.elements.userInfo.textContent = `User: ${this.userId}`;
                 await this.loadConversations();
 
-                // Load last active conversation or create new
-                const lastConversation = this.conversations[0];
+                // Load last active conversation if exists
+                const lastConversation = this.conversations.find(c => c.status === 'active');
                 if (lastConversation) {
                     await this.loadConversation(lastConversation.id);
-                } else {
-                    await this.createNewChat();
                 }
             }
 
@@ -815,60 +814,91 @@
             }
 
             async createNewChat() {
+                if (this.isCreatingNewChat || this.isLoading) return;
+
+                this.isCreatingNewChat = true;
+                this.disableInput();
+
                 try {
-                    const response = await fetch('/chat/stream', {
+                    // Create a new conversation via the API
+                    const response = await fetch('/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             message: "Hello! I'm ready to help with Web3 and cryptocurrency questions.",
-                            user_id: this.userId
+                            user_id: this.userId,
+                            conversation_id: null // Force new conversation
                         })
                     });
 
-                    // Extract conversation ID from stream
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let conversationId = null;
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        const chunk = decoder.decode(value);
-                        const lines = chunk.split('\n');
-
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                try {
-                                    const data = JSON.parse(line.slice(6));
-                                    if (data.type === 'conversation_id') {
-                                        conversationId = data.conversation_id;
-                                        break;
-                                    }
-                                } catch (e) {}
-                            }
-                        }
-                        if (conversationId) break;
+                    if (!response.ok) {
+                        throw new Error('Failed to create new chat');
                     }
 
-                    if (conversationId) {
-                        await this.loadConversations();
-                        await this.loadConversation(conversationId);
-                    }
+                    const data = await response.json();
+                    const newConversationId = data.conversation_id;
+
+                    // Clear current messages
+                    this.clearCurrentChat();
+
+                    // Set the new conversation as current
+                    this.currentConversationId = newConversationId;
+
+                    // Reload conversations to get the new one
+                    await this.loadConversations();
+
+                    // Load the new conversation
+                    await this.loadConversation(newConversationId);
+
+                    // Focus on input
+                    this.elements.chatInput.focus();
 
                 } catch (error) {
                     console.error('Error creating new chat:', error);
                     this.showError('Failed to create new chat');
+                } finally {
+                    this.isCreatingNewChat = false;
+                    this.enableInput();
+                }
+            }
+
+            clearCurrentChat() {
+                // Clear messages container
+                this.elements.messagesContainer.innerHTML = '';
+
+                // Add typing indicator back
+                const typingIndicator = document.createElement('div');
+                typingIndicator.className = 'message assistant';
+                typingIndicator.id = 'typingIndicator';
+                typingIndicator.style.display = 'none';
+                typingIndicator.innerHTML = `
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content">
+                        <div class="typing-indicator" style="display: flex;">
+                            <div class="typing-dot"></div>
+                            <div class="typing-dot"></div>
+                            <div class="typing-dot"></div>
+                        </div>
+                    </div>
+                `;
+                this.elements.messagesContainer.appendChild(typingIndicator);
+
+                // Clear message cache for current conversation
+                if (this.currentConversationId) {
+                    this.messageCache.delete(this.currentConversationId);
                 }
             }
 
             async loadConversation(conversationId) {
-                if (this.isLoading) return;
+                if (this.isLoading || this.isCreatingNewChat) return;
 
                 this.isLoading = true;
                 this.currentConversationId = conversationId;
 
                 try {
+                    // Clear current messages first
+                    this.clearCurrentChat();
+
                     // Update UI
                     this.enableInput();
                     this.renderConversations();
@@ -900,6 +930,9 @@
 
             renderMessages(messages) {
                 const container = this.elements.messagesContainer;
+
+                // Clear container but keep typing indicator
+                const typingIndicator = document.getElementById('typingIndicator');
                 container.innerHTML = '';
 
                 if (messages.length === 0) {
@@ -909,37 +942,47 @@
                             <div class="empty-state-text">Start a conversation!</div>
                         </div>
                     `;
-                    return;
+                } else {
+                    messages.forEach(msg => {
+                        if (msg.role === 'user' || msg.role === 'assistant') {
+                            this.addMessageToUI(msg.content, msg.role, new Date(msg.timestamp * 1000), false);
+                        }
+                    });
                 }
 
-                messages.forEach(msg => {
-                    if (msg.role === 'user' || msg.role === 'assistant') {
-                        this.addMessageToUI(msg.content, msg.role, new Date(msg.timestamp * 1000), false);
-                    }
-                });
-
-                // Add typing indicator
-                const typingIndicator = document.createElement('div');
-                typingIndicator.className = 'message assistant';
-                typingIndicator.id = 'typingIndicator';
-                typingIndicator.style.display = 'none';
-                typingIndicator.innerHTML = `
-                    <div class="message-avatar">🤖</div>
-                    <div class="message-content">
-                        <div class="typing-indicator" style="display: flex;">
-                            <div class="typing-dot"></div>
-                            <div class="typing-dot"></div>
-                            <div class="typing-dot"></div>
+                // Re-add typing indicator
+                if (typingIndicator) {
+                    container.appendChild(typingIndicator);
+                } else {
+                    const newTypingIndicator = document.createElement('div');
+                    newTypingIndicator.className = 'message assistant';
+                    newTypingIndicator.id = 'typingIndicator';
+                    newTypingIndicator.style.display = 'none';
+                    newTypingIndicator.innerHTML = `
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content">
+                            <div class="typing-indicator" style="display: flex;">
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                            </div>
                         </div>
-                    </div>
-                `;
-                container.appendChild(typingIndicator);
+                    `;
+                    container.appendChild(newTypingIndicator);
+                }
 
                 this.scrollToBottom();
             }
 
             async sendMessage(message) {
-                if (!this.currentConversationId || this.isLoading) return;
+                if (!message.trim() || this.isLoading || this.isCreatingNewChat) return;
+
+                // If no conversation is active, create a new one
+                if (!this.currentConversationId) {
+                    await this.createNewChat();
+                    // Wait a bit for the new chat to be ready
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
 
                 this.isLoading = true;
                 this.elements.sendBtn.disabled = true;
@@ -964,6 +1007,9 @@
                     });
 
                     await this.handleStreamingResponse(response);
+
+                    // Refresh conversations list to update message count
+                    await this.loadConversations();
 
                 } catch (error) {
                     console.error('Error sending message:', error);
@@ -1005,9 +1051,15 @@
                                         this.updateMessageContent(messageElement, assistantMessage);
                                         break;
 
+                                    case 'conversation_id':
+                                        // Update conversation ID if it changed
+                                        if (data.conversation_id && data.conversation_id !== this.currentConversationId) {
+                                            this.currentConversationId = data.conversation_id;
+                                        }
+                                        break;
+
                                     case 'complete':
-                                        // Refresh conversations list to update message count
-                                        await this.loadConversations();
+                                        // Message complete
                                         break;
                                 }
                             } catch (e) {
@@ -1131,20 +1183,25 @@
                 const newTitle = prompt('Enter new name for this conversation:', conversation.title || 'Untitled Chat');
                 if (!newTitle || newTitle === conversation.title) return;
 
-                // Update locally first for immediate feedback
-                conversation.title = newTitle;
-                this.renderConversations();
+                try {
+                    const response = await fetch(`/api/conversations/${conversationId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: newTitle })
+                    });
 
-                if (conversationId === this.currentConversationId) {
-                    this.elements.chatTitle.textContent = newTitle;
+                    if (response.ok) {
+                        // Update locally
+                        conversation.title = newTitle;
+                        this.renderConversations();
+
+                        if (conversationId === this.currentConversationId) {
+                            this.elements.chatTitle.textContent = newTitle;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error renaming conversation:', error);
                 }
-
-                // TODO: Add API endpoint to update conversation title
-                // await fetch(`/api/conversations/${conversationId}`, {
-                //     method: 'PATCH',
-                //     headers: { 'Content-Type': 'application/json' },
-                //     body: JSON.stringify({ title: newTitle })
-                // });
             }
 
             async deleteConversation(conversationId) {
@@ -1160,12 +1217,28 @@
                     // Remove from local list
                     this.conversations = this.conversations.filter(c => c.id !== conversationId);
 
-                    // If deleting current conversation, load another or create new
+                    // If deleting current conversation, clear the chat
                     if (conversationId === this.currentConversationId) {
+                        this.currentConversationId = null;
+                        this.clearCurrentChat();
+                        this.elements.chatTitle.textContent = 'Select or create a chat';
+                        this.elements.chatInfo.textContent = '';
+                        this.disableInput();
+
+                        // Show empty state
+                        this.elements.messagesContainer.innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">💬</div>
+                                <div class="empty-state-text">Select a conversation or create a new one to start chatting</div>
+                                <button class="new-chat-btn" onclick="chatManager.createNewChat()">
+                                    <span>➕</span> Start New Chat
+                                </button>
+                            </div>
+                        `;
+
+                        // If there are other conversations, optionally load the first one
                         if (this.conversations.length > 0) {
                             await this.loadConversation(this.conversations[0].id);
-                        } else {
-                            await this.createNewChat();
                         }
                     }
 
@@ -1276,6 +1349,11 @@
             }
 
             getLastMessagePreview(conversation) {
+                // Use preview from conversation object
+                if (conversation.last_message_preview) {
+                    return conversation.last_message_preview;
+                }
+
                 // Get from cache if available
                 const messages = this.messageCache.get(conversation.id);
                 if (messages && messages.length > 0) {
