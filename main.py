@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +7,7 @@ import json
 import asyncio
 import time
 import uuid
-from typing import AsyncGenerator, Optional, List
+from typing import AsyncGenerator, Optional, List, Dict
 from datetime import datetime
 
 from intent_detector import IntentDetector
@@ -16,6 +16,8 @@ from services.price_service import PriceService
 from utils.cache import CacheManager
 from utils.typesense_client import TypesenseClient
 from config import settings
+from services.auth_service import AuthService
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 app = FastAPI(
     title="Web3 Fast Chatbot API",
@@ -41,7 +43,55 @@ typesense_client = TypesenseClient()
 intent_detector = IntentDetector()
 chat_service = ChatService(cache_manager)
 price_service = PriceService(cache_manager)
+auth_service = AuthService()
+security = HTTPBearer()
 
+
+class SignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    remember_me: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordConfirm(BaseModel):
+    token: str
+    new_password: str
+
+
+# Dependency to get current user
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[Dict]:
+    """Get current user from JWT token"""
+    token = credentials.credentials
+    user = await auth_service.get_user_by_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return user
+
+
+# Optional authentication dependency
+async def get_optional_user(request: Request) -> Optional[Dict]:
+    """Get current user if authenticated, None otherwise"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header.split(" ")[1]
+    return await auth_service.get_user_by_token(token)
 
 # Request/Response Models
 class ChatRequest(BaseModel):
@@ -84,6 +134,8 @@ async def startup_event():
     # Initialize chat service (includes Typesense setup)
     await chat_service.initialize()
 
+    await auth_service.initialize()
+
     print("🚀 Web3 Chatbot API started!")
     print(f"📊 Cache: {'✅ Connected' if cache_manager.redis else '❌ Disconnected'}")
     print(f"🔍 Typesense: {'✅ Ready' if await typesense_client.health_check() else '❌ Not Ready'}")
@@ -104,12 +156,121 @@ async def serve_frontend():
     return FileResponse("static/index.html")
 
 
-# This is a partial update for main.py - just the chat endpoint
+# Authentication Routes
+@app.post("/api/auth/signup")
+async def signup(request: SignupRequest):
+    """Create new user account"""
+    success, result = await auth_service.signup(
+        name=request.name,
+        email=request.email,
+        password=request.password
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=result.get('error', 'Signup failed'))
+
+    return result
+
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, req: Request):
+    """Login user"""
+    # Get IP and user agent for session tracking
+    ip_address = req.client.host if req.client else None
+    user_agent = req.headers.get('user-agent')
+
+    success, result = await auth_service.login(
+        email=request.email,
+        password=request.password,
+        ip_address=ip_address,
+        user_agent=user_agent
+    )
+
+    if not success:
+        raise HTTPException(status_code=401, detail=result.get('error', 'Login failed'))
+
+    return result
+
+
+@app.post("/api/auth/logout")
+async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Logout user"""
+    token = credentials.credentials
+    success = await auth_service.logout(token)
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Logout failed")
+
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/api/auth/verify")
+async def verify_token(user: Dict = Depends(get_current_user)):
+    """Verify if token is valid"""
+    return {"valid": True, "user": user}
+
+
+@app.get("/api/auth/me")
+async def get_me(user: Dict = Depends(get_current_user)):
+    """Get current user info"""
+    return user
+
+
+@app.post("/api/auth/change-password")
+async def change_password(request: ChangePasswordRequest, user: Dict = Depends(get_current_user)):
+    """Change user password"""
+    success, result = await auth_service.change_password(
+        user_id=user['id'],
+        old_password=request.old_password,
+        new_password=request.new_password
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=result.get('error', 'Failed to change password'))
+
+    return result
+
+
+@app.post("/api/auth/reset-password")
+async def request_reset_password(request: ResetPasswordRequest):
+    """Request password reset"""
+    success, result = await auth_service.request_password_reset(email=request.email)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=result.get('error', 'Failed to request reset'))
+
+    # In production, send email with reset link
+    # For now, return the token (don't do this in production!)
+    return {"message": "Reset link sent to email", "debug_token": result.get('token')}
+
+
+@app.post("/api/auth/reset-password/confirm")
+async def reset_password_confirm(request: ResetPasswordConfirm):
+    """Reset password with token"""
+    success, result = await auth_service.reset_password(
+        token=request.token,
+        new_password=request.new_password
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=result.get('error', 'Failed to reset password'))
+
+    return result
+
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    """Synchronous chat endpoint with conversation management"""
+async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get_optional_user)):
+    """Synchronous chat endpoint with authentication"""
     start_time = time.time()
+
+    # Use authenticated user ID or fall back to provided user_id
+    if user:
+        actual_user_id = user['id']
+        user_name = user['name']
+    else:
+        # For backwards compatibility, allow unauthenticated access
+        actual_user_id = request.user_id
+        user_name = "Guest"
 
     try:
         # Detect intent
@@ -118,35 +279,31 @@ async def chat_endpoint(request: ChatRequest):
         # Handle conversation creation/selection
         conversation_id = request.conversation_id
 
-        # If no conversation_id is provided, let the chat service handle it
         if not conversation_id:
-            # For initial greeting messages that create new conversations
             if "ready to help" in request.message.lower():
                 conversation_id = await chat_service.get_or_create_conversation(
-                    request.user_id,
-                    force_new=True  # Force new conversation for greeting
+                    actual_user_id,
+                    force_new=True
                 )
             else:
-                conversation_id = await chat_service.get_or_create_conversation(request.user_id)
+                conversation_id = await chat_service.get_or_create_conversation(actual_user_id)
 
-        # Store the conversation_id for response
         final_conversation_id = conversation_id
 
         # Route based on intent
         if intent == "price_query":
             response = await price_service.handle_price_query(request.message)
 
-            # Save price queries to history too
             await typesense_client.add_message(
                 conversation_id=final_conversation_id,
-                user_id=request.user_id,
+                user_id=actual_user_id,
                 role="user",
                 content=request.message,
                 intent=intent
             )
             await typesense_client.add_message(
                 conversation_id=final_conversation_id,
-                user_id=request.user_id,
+                user_id=actual_user_id,
                 role="assistant",
                 content=response,
                 intent=intent,
@@ -154,19 +311,18 @@ async def chat_endpoint(request: ChatRequest):
             )
 
         elif intent == "wallet_query":
-            response = "🔒 Wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
+            response = f"🔒 {user_name}, wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
 
-            # Save to history
             await typesense_client.add_message(
                 conversation_id=final_conversation_id,
-                user_id=request.user_id,
+                user_id=actual_user_id,
                 role="user",
                 content=request.message,
                 intent=intent
             )
             await typesense_client.add_message(
                 conversation_id=final_conversation_id,
-                user_id=request.user_id,
+                user_id=actual_user_id,
                 role="assistant",
                 content=response,
                 intent=intent,
@@ -174,12 +330,12 @@ async def chat_endpoint(request: ChatRequest):
             )
 
         elif intent == "non_web3":
-            response = await chat_service.handle_non_web3_query(request.message, request.user_id)
+            response = await chat_service.handle_non_web3_query(request.message, actual_user_id)
 
         else:  # web3_chat or general_chat
             response = await chat_service.handle_chat(
                 request.message,
-                request.user_id,
+                actual_user_id,
                 final_conversation_id
             )
 
@@ -198,13 +354,40 @@ async def chat_endpoint(request: ChatRequest):
 
 
 @app.post("/chat/stream")
-async def chat_stream_endpoint(request: StreamChatRequest):
-    """Streaming chat endpoint with conversation support"""
+async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] = Depends(get_optional_user)):
+    """Streaming chat endpoint with authentication"""
 
     async def generate_response() -> AsyncGenerator[str, None]:
         start_time = time.time()
 
+        # Use authenticated user ID or fall back to provided user_id
+        if user:
+            actual_user_id = user['id']
+            user_name = user['name']
+        else:
+            actual_user_id = request.user_id
+            user_name = "Guest"
+
         try:
+            yield f"data: {json.dumps({'type': 'start', 'message': 'Processing...'})}\n\n"
+
+            # Rest of the streaming logic remains the same, just use actual_user_id
+            intent = await intent_detector.detect_intent(request.message)
+            yield f"data: {json.dumps({'type': 'intent', 'intent': intent})}\n\n"
+
+            conversation_id = request.conversation_id
+
+            if not conversation_id and "ready to help" in request.message.lower():
+                conversation_id = await chat_service.get_or_create_conversation(
+                    actual_user_id,
+                    force_new=True
+                )
+            elif not conversation_id:
+                conversation_id = await chat_service.get_or_create_conversation(actual_user_id)
+
+            yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conversation_id})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'user_info', 'user_name': user_name})}\n\n"
             # Send initial acknowledgment
             yield f"data: {json.dumps({'type': 'start', 'message': 'Processing...'})}\n\n"
 
@@ -320,6 +503,10 @@ async def chat_stream_endpoint(request: StreamChatRequest):
         }
     )
 
+@app.get("/auth", response_class=HTMLResponse)
+async def serve_auth():
+    """Serve the authentication page"""
+    return FileResponse("static/auth.html")
 
 # Conversation Management Endpoints
 @app.get("/api/conversations")

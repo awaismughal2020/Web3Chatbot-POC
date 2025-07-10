@@ -599,6 +599,27 @@
             <div class="conversations-list" id="conversationsList">
                 <!-- Conversations will be loaded here -->
             </div>
+
+            <!-- Add this new section at the bottom of the sidebar -->
+            <div class="sidebar-footer" style="padding: 15px; border-top: 1px solid #2a2a2a; margin-top: auto;">
+                <button id="logoutBtn" style="
+                    width: 100%;
+                    padding: 10px;
+                    background: #2a2a2a;
+                    border: none;
+                    border-radius: 8px;
+                    color: #ff6b6b;
+                    cursor: pointer;
+                    font-size: 0.9rem;
+                    transition: all 0.2s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                " onmouseover="this.style.background='#3a3a3a'" onmouseout="this.style.background='#2a2a2a'">
+                    <span>🚪</span> Logout
+                </button>
+            </div>
         </div>
 
         <!-- Main Chat Area -->

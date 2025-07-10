@@ -60,6 +60,17 @@ LOG_FORMAT = os.getenv("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "60"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
 
+# Authentication Settings
+AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "your-secret-key-change-this-in-production")
+AUTH_TOKEN_EXPIRY_HOURS = int(os.getenv("AUTH_TOKEN_EXPIRY_HOURS", "168"))  # 7 days
+AUTH_SESSION_EXPIRY_HOURS = int(os.getenv("AUTH_SESSION_EXPIRY_HOURS", "24"))  # 1 day
+
+# Email Settings (for password reset, optional)
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "noreply@web3chatbot.com")
 
 class Settings:
     def __init__(self):
