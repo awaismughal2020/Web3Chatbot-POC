@@ -11,13 +11,13 @@ from typing import AsyncGenerator, Optional, List, Dict
 from datetime import datetime
 
 from intent_detector import IntentDetector
-from services.chat_service import ChatService  # Use the improved version
 from services.price_service import PriceService
 from utils.cache import CacheManager
 from utils.typesense_client import TypesenseClient
 from config import settings
 from services.auth_service import AuthService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from services.enhanced_chat_service import EnhancedChatService
 
 app = FastAPI(
     title="Web3 Fast Chatbot API",
@@ -41,7 +41,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 cache_manager = CacheManager()
 typesense_client = TypesenseClient()
 intent_detector = IntentDetector()
-chat_service = ChatService(cache_manager)
+chat_service = EnhancedChatService(cache_manager)
 price_service = PriceService(cache_manager)
 auth_service = AuthService()
 security = HTTPBearer()
@@ -131,15 +131,128 @@ async def startup_event():
     # Connect to cache
     await cache_manager.connect()
 
+    # Initialize enhanced chat service with context handling
+    global chat_service
+    chat_service = EnhancedChatService(
+        cache_manager,
+        model_name="meta-llama/llama-4-maverick-17b-128e-instruct"  # Use the 128K model
+    )
+
     # Initialize chat service (includes Typesense setup)
     await chat_service.initialize()
 
     await auth_service.initialize()
 
-    print("🚀 Web3 Chatbot API started!")
-    print(f"📊 Cache: {'✅ Connected' if cache_manager.redis else '❌ Disconnected'}")
-    print(f"🔍 Typesense: {'✅ Ready' if await typesense_client.health_check() else '❌ Not Ready'}")
+    print("Web3 Chatbot API started with Enhanced Context!")
+    print(f"Cache: {'Connected' if cache_manager.redis else 'Disconnected'}")
+    print(f"Typesense: {'Ready' if await typesense_client.health_check() else 'Not Ready'}")
+    print(f"Context Model: meta-llama/llama-4-maverick-17b-128e-instruct (128K)")
+    print(f"Context Optimization: {'Enabled' if chat_service.enable_context else 'Disabled'}")
 
+
+@app.get("/api/context/stats")
+async def get_context_stats():
+    """Get context handling statistics"""
+    try:
+        stats = chat_service.get_context_stats()
+        return {
+            "status": "success",
+            "stats": stats,
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        print(f"Error getting context stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/context/toggle")
+async def toggle_context_optimization(enabled: bool = True):
+    """Toggle context optimization on/off"""
+    try:
+        chat_service.toggle_context_optimization(enabled)
+        return {
+            "status": "success",
+            "context_enabled": enabled,
+            "message": f"Context optimization {'enabled' if enabled else 'disabled'}"
+        }
+    except Exception as e:
+        print(f"Error toggling context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/context/settings")
+async def update_context_settings(
+        max_messages: Optional[int] = None,
+        cache_duration: Optional[int] = None
+):
+    """Update context settings"""
+    try:
+        chat_service.update_context_settings(
+            max_messages=max_messages,
+            cache_duration=cache_duration
+        )
+
+        return {
+            "status": "success",
+            "settings": {
+                "max_messages": chat_service.max_context_messages,
+                "cache_duration": chat_service.context_cache_duration
+            }
+        }
+    except Exception as e:
+        print(f"Error updating context settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/context/clear-cache")
+async def clear_context_cache():
+    """Clear context cache"""
+    try:
+        chat_service.clear_context_cache()
+        return {
+            "status": "success",
+            "message": "Context cache cleared"
+        }
+    except Exception as e:
+        print(f"Error clearing context cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/context/debug")
+async def debug_context(
+        conversation_id: str,
+        current_query: str,
+        user_id: str = "default"
+):
+    """Debug context building for a specific query"""
+    try:
+        # Get conversation messages
+        messages = await chat_service.get_conversation_messages(conversation_id)
+
+        # Get context summary
+        context_summary = chat_service.get_context_summary(messages, current_query)
+
+        # Get built context
+        context = chat_service.context_handler.build_optimized_context(messages, current_query)
+
+        return {
+            "status": "success",
+            "conversation_id": conversation_id,
+            "query": current_query,
+            "summary": context_summary,
+            "context_messages": len(context),
+            "context_preview": context[:3] if context else [],  # Show first 3 context messages
+            "debug_info": {
+                "total_available_messages": len(messages),
+                "context_messages_selected": len(context),
+                "estimated_tokens": sum(
+                    chat_service.context_handler.estimate_tokens(msg['content']) for msg in context),
+                "token_budget": chat_service.context_handler.available_context_tokens
+            }
+        }
+    except Exception as e:
+        print(f"Error debugging context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -260,7 +373,7 @@ async def reset_password_confirm(request: ResetPasswordConfirm):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get_optional_user)):
-    """Synchronous chat endpoint with authentication"""
+    """Synchronous chat endpoint with enhanced context handling"""
     start_time = time.time()
 
     # Use authenticated user ID or fall back to provided user_id
@@ -268,7 +381,6 @@ async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get
         actual_user_id = user['id']
         user_name = user['name']
     else:
-        # For backwards compatibility, allow unauthenticated access
         actual_user_id = request.user_id
         user_name = "Guest"
 
@@ -294,6 +406,7 @@ async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get
         if intent == "price_query":
             response = await price_service.handle_price_query(request.message)
 
+            # Note: Price queries might not need full context, but we still track them
             await typesense_client.add_message(
                 conversation_id=final_conversation_id,
                 user_id=actual_user_id,
@@ -332,7 +445,7 @@ async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get
         elif intent == "non_web3":
             response = await chat_service.handle_non_web3_query(request.message, actual_user_id)
 
-        else:  # web3_chat or general_chat
+        else:  # web3_chat or general_chat - Use enhanced context here
             response = await chat_service.handle_chat(
                 request.message,
                 actual_user_id,
@@ -353,9 +466,10 @@ async def chat_endpoint(request: ChatRequest, user: Optional[Dict] = Depends(get
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Update the streaming chat endpoint:
 @app.post("/chat/stream")
 async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] = Depends(get_optional_user)):
-    """Streaming chat endpoint with authentication"""
+    """Streaming chat endpoint with enhanced context handling"""
 
     async def generate_response() -> AsyncGenerator[str, None]:
         start_time = time.time()
@@ -369,12 +483,13 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
             user_name = "Guest"
 
         try:
-            yield f"data: {json.dumps({'type': 'start', 'message': 'Processing...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'message': 'Processing with enhanced context...'})}\n\n"
 
-            # Rest of the streaming logic remains the same, just use actual_user_id
+            # Detect intent
             intent = await intent_detector.detect_intent(request.message)
             yield f"data: {json.dumps({'type': 'intent', 'intent': intent})}\n\n"
 
+            # Handle conversation creation/selection
             conversation_id = request.conversation_id
 
             if not conversation_id and "ready to help" in request.message.lower():
@@ -386,35 +501,14 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                 conversation_id = await chat_service.get_or_create_conversation(actual_user_id)
 
             yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conversation_id})}\n\n"
-
             yield f"data: {json.dumps({'type': 'user_info', 'user_name': user_name})}\n\n"
-            # Send initial acknowledgment
-            yield f"data: {json.dumps({'type': 'start', 'message': 'Processing...'})}\n\n"
-
-            # Detect intent
-            intent = await intent_detector.detect_intent(request.message)
-            yield f"data: {json.dumps({'type': 'intent', 'intent': intent})}\n\n"
-
-            # Handle conversation creation/selection
-            conversation_id = request.conversation_id
-
-            # If this is a greeting message for new chat, force new conversation
-            if not conversation_id and "ready to help" in request.message.lower():
-                conversation_id = await chat_service.get_or_create_conversation(
-                    request.user_id,
-                    force_new=True
-                )
-            elif not conversation_id:
-                conversation_id = await chat_service.get_or_create_conversation(request.user_id)
-
-            yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conversation_id})}\n\n"
 
             # Route based on intent
             if intent == "price_query":
-                # Save user message
+                # Handle price queries (no context needed)
                 await typesense_client.add_message(
                     conversation_id=conversation_id,
-                    user_id=request.user_id,
+                    user_id=actual_user_id,
                     role="user",
                     content=request.message,
                     intent=intent
@@ -425,10 +519,9 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                     full_response += chunk
                     yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
 
-                # Save assistant response
                 await typesense_client.add_message(
                     conversation_id=conversation_id,
-                    user_id=request.user_id,
+                    user_id=actual_user_id,
                     role="assistant",
                     content=full_response,
                     intent=intent,
@@ -436,12 +529,11 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                 )
 
             elif intent == "wallet_query":
-                wallet_msg = "🔒 Wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
+                wallet_msg = f"🔒 {user_name}, wallet features are coming soon! For now, I can help with cryptocurrency prices and Web3 concepts."
 
-                # Save user message
                 await typesense_client.add_message(
                     conversation_id=conversation_id,
-                    user_id=request.user_id,
+                    user_id=actual_user_id,
                     role="user",
                     content=request.message,
                     intent=intent
@@ -452,10 +544,9 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                     yield f"data: {json.dumps({'type': 'content', 'content': word + ' '})}\n\n"
                     await asyncio.sleep(0.03)
 
-                # Save assistant response
                 await typesense_client.add_message(
                     conversation_id=conversation_id,
-                    user_id=request.user_id,
+                    user_id=actual_user_id,
                     role="assistant",
                     content=wallet_msg,
                     intent=intent,
@@ -463,16 +554,27 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                 )
 
             elif intent == "non_web3":
-                response = await chat_service.handle_non_web3_query(request.message, request.user_id)
+                response = await chat_service.handle_non_web3_query(request.message, actual_user_id)
                 for word in response.split():
                     yield f"data: {json.dumps({'type': 'content', 'content': word + ' '})}\n\n"
                     await asyncio.sleep(0.03)
 
-            else:  # web3_chat or general_chat
+            else:  # web3_chat or general_chat - Use enhanced streaming context
                 conversation_sent = False
+
+                # Add context info to stream
+                try:
+                    # Get context summary for debugging
+                    recent_messages = await chat_service.get_conversation_messages(conversation_id, limit=50)
+                    if recent_messages:
+                        context_summary = chat_service.get_context_summary(recent_messages, request.message)
+                        yield f"data: {json.dumps({'type': 'context_info', 'context_summary': context_summary})}\n\n"
+                except:
+                    pass  # Don't fail if context info unavailable
+
                 async for chunk in chat_service.stream_chat_response(
                         request.message,
-                        request.user_id,
+                        actual_user_id,
                         conversation_id
                 ):
                     # Handle special conversation ID marker
@@ -484,9 +586,22 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
                     else:
                         yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
 
-            # Send completion
+            # Send completion with context stats
             response_time = time.time() - start_time
-            yield f"data: {json.dumps({'type': 'complete', 'response_time': round(response_time, 3)})}\n\n"
+            completion_data = {
+                'type': 'complete',
+                'response_time': round(response_time, 3)
+            }
+
+            # Add context stats for web3 queries
+            if intent in ['web3_chat', 'general_chat']:
+                try:
+                    context_stats = chat_service.get_context_stats()
+                    completion_data['context_stats'] = context_stats
+                except:
+                    pass
+
+            yield f"data: {json.dumps(completion_data)}\n\n"
 
         except Exception as e:
             print(f"Streaming error: {e}")
@@ -502,6 +617,56 @@ async def chat_stream_endpoint(request: StreamChatRequest, user: Optional[Dict] 
             "X-Accel-Buffering": "no"
         }
     )
+
+
+# Update the health check to include context information:
+@app.get("/health")
+async def health_check():
+    """Health check endpoint with context information"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "services": {
+            "cache": await cache_manager.health_check(),
+            "typesense": await typesense_client.health_check(),
+            "groq": await chat_service.groq_client.health_check(),
+            "coingecko": await price_service.coingecko.health_check()
+        },
+        "context": {
+            "model": chat_service.context_handler.model_name,
+            "context_enabled": chat_service.enable_context,
+            "max_context_tokens": chat_service.context_handler.available_context_tokens,
+            "cache_size": len(chat_service.context_handler.context_cache)
+        }
+    }
+
+    # Determine overall health
+    all_healthy = all(health_status["services"].values())
+    health_status["status"] = "healthy" if all_healthy else "degraded"
+
+    return health_status
+
+
+# Update metrics endpoint:
+@app.get("/metrics")
+async def get_metrics():
+    """Get application metrics including context performance"""
+    try:
+        cache_stats = await cache_manager.get_stats()
+        chat_stats = await chat_service.get_chat_stats()
+        context_stats = chat_service.get_context_stats()
+
+        return {
+            "timestamp": time.time(),
+            "cache": cache_stats,
+            "chat": chat_stats,
+            "context": context_stats,
+            "uptime": time.time() - startup_time if 'startup_time' in globals() else 0
+        }
+
+    except Exception as e:
+        print(f"Error getting metrics: {e}")
+        return {"error": str(e)}
 
 @app.get("/auth", response_class=HTMLResponse)
 async def serve_auth():
@@ -696,47 +861,6 @@ async def export_user_history(user_id: str, limit: int = Query(100, le=1000)):
     except Exception as e:
         print(f"Error exporting user history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# Health & Monitoring Endpoints
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": time.time(),
-        "services": {
-            "cache": await cache_manager.health_check(),
-            "typesense": await typesense_client.health_check(),
-            "groq": await chat_service.groq_client.health_check(),
-            "coingecko": await price_service.coingecko.health_check()
-        }
-    }
-
-    # Determine overall health
-    all_healthy = all(health_status["services"].values())
-    health_status["status"] = "healthy" if all_healthy else "degraded"
-
-    return health_status
-
-
-@app.get("/metrics")
-async def get_metrics():
-    """Get application metrics"""
-    try:
-        cache_stats = await cache_manager.get_stats()
-        chat_stats = await chat_service.get_chat_stats()
-
-        return {
-            "timestamp": time.time(),
-            "cache": cache_stats,
-            "chat": chat_stats,
-            "uptime": time.time() - startup_time if 'startup_time' in globals() else 0
-        }
-
-    except Exception as e:
-        print(f"Error getting metrics: {e}")
-        return {"error": str(e)}
 
 
 # Error Handlers
