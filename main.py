@@ -508,6 +508,11 @@ async def serve_auth():
     """Serve the authentication page"""
     return FileResponse("static/auth.html")
 
+@app.get("/chat", response_class=HTMLResponse)
+async def serve_chat():
+    """Serve the main chat interface"""
+    return FileResponse("static/index.html")
+
 # Conversation Management Endpoints
 @app.get("/api/conversations")
 async def get_conversations(

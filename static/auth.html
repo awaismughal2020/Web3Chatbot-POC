@@ -421,7 +421,7 @@
     <div class="auth-container">
         <div class="logo-section">
             <div class="logo">🚀</div>
-            <h1 class="logo-text">Web3 Fast Chatbot</h1>
+            <h1 class="logo-text">Web3 Chatbot</h1>
             <p class="logo-subtitle">Your AI-powered crypto assistant</p>
         </div>
 
@@ -628,9 +628,9 @@
 
                     showMessage('Login successful! Redirecting...', 'success');
 
-                    // Redirect to main chat
+                    // Redirect to main chat interface
                     setTimeout(() => {
-                        window.location.href = '/';
+                        window.location.href = '/';  // This will now serve index.html
                     }, 1000);
                 } else {
                     showMessage(data.error || 'Invalid email or password', 'error');
@@ -702,6 +702,7 @@
                 })
                 .then(response => {
                     if (response.ok) {
+                        // Already logged in, redirect to main interface
                         window.location.href = '/';
                     }
                 })
@@ -709,6 +710,8 @@
                     // Token invalid, stay on login page
                     localStorage.removeItem('auth_token');
                     sessionStorage.removeItem('auth_token');
+                    localStorage.removeItem('user_data');
+                    sessionStorage.removeItem('user_data');
                 });
             }
         };

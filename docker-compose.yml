@@ -83,8 +83,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      typesense:
-        condition: service_healthy
 
     restart: unless-stopped
 

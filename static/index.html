@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web3 Fast Chatbot - Complete Chat History</title>
+    <title>Web3 Chatbot</title>
+    <!-- Add favicon to prevent 404 error -->
+    <link rel="icon" type="image/x-icon" href="data:image/x-icon;base64,">
     <style>
+        /* Keep all your existing CSS styles here - unchanged */
         * {
             margin: 0;
             padding: 0;
@@ -588,7 +591,8 @@
                 <div class="user-info" id="userInfo">Loading...</div>
             </div>
 
-            <button class="new-chat-btn" onclick="chatManager.createNewChat()">
+            <!-- FIXED: Remove onclick, use data attributes instead -->
+            <button class="new-chat-btn" data-action="createNewChat">
                 <span>➕</span> New Chat
             </button>
 
@@ -600,8 +604,8 @@
                 <!-- Conversations will be loaded here -->
             </div>
 
-            <!-- Add this new section at the bottom of the sidebar -->
             <div class="sidebar-footer" style="padding: 15px; border-top: 1px solid #2a2a2a; margin-top: auto;">
+                <!-- FIXED: Remove onclick -->
                 <button id="logoutBtn" style="
                     width: 100%;
                     padding: 10px;
@@ -630,9 +634,10 @@
                     <div class="chat-info" id="chatInfo"></div>
                 </div>
                 <div class="chat-actions">
-                    <button class="header-btn" onclick="chatManager.exportCurrentChat()">📥 Export</button>
-                    <button class="header-btn" onclick="chatManager.showStats()">📊 Stats</button>
-                    <button class="header-btn" onclick="chatManager.deleteCurrentChat()">🗑️ Delete</button>
+                    <!-- FIXED: Remove onclick, use data attributes -->
+                    <button class="header-btn" data-action="exportCurrentChat">📥 Export</button>
+                    <button class="header-btn" data-action="showStats">📊 Stats</button>
+                    <button class="header-btn" data-action="deleteCurrentChat">🗑️ Delete</button>
                 </div>
             </div>
 
@@ -640,7 +645,8 @@
                 <div class="empty-state">
                     <div class="empty-state-icon">💬</div>
                     <div class="empty-state-text">Select a conversation or create a new one to start chatting</div>
-                    <button class="new-chat-btn" onclick="chatManager.createNewChat()">
+                    <!-- FIXED: Remove onclick -->
+                    <button class="new-chat-btn" data-action="createNewChat">
                         <span>➕</span> Start New Chat
                     </button>
                 </div>
@@ -663,21 +669,21 @@
                 </form>
 
                 <div class="suggestions">
-                    <div class="suggestion-chip" onclick="chatManager.sendMessage('What is the price of Bitcoin?')">BTC Price</div>
-                    <div class="suggestion-chip" onclick="chatManager.sendMessage('Explain DeFi')">What is DeFi?</div>
-                    <div class="suggestion-chip" onclick="chatManager.sendMessage('Latest crypto news')">Crypto News</div>
-                    <div class="suggestion-chip" onclick="chatManager.sendMessage('What are NFTs?')">NFTs Explained</div>
+                    <!-- FIXED: Remove onclick, use data attributes -->
+                    <div class="suggestion-chip" data-message="What is the price of Bitcoin?">BTC Price</div>
+                    <div class="suggestion-chip" data-message="Explain DeFi">What is DeFi?</div>
+                    <div class="suggestion-chip" data-message="Latest crypto news">Crypto News</div>
+                    <div class="suggestion-chip" data-message="What are NFTs?">NFTs Explained</div>
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- Stats Modal -->
     <div class="modal" id="statsModal">
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Chat Statistics</h3>
-                <button class="close-btn" onclick="document.getElementById('statsModal').style.display='none'">&times;</button>
+                <!-- FIXED: Remove onclick -->
+                <button class="close-btn" data-action="closeModal">&times;</button>
             </div>
             <div class="stats-grid">
                 <div class="stat-card">
@@ -700,11 +706,57 @@
             <div id="commonTopics"></div>
         </div>
     </div>
-
     <script>
+        (function checkAuth() {
+            const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+
+            if (!token) {
+                // No token found, redirect to auth page
+                window.location.href = '/auth';
+                return;
+            }
+
+            // Verify token is still valid
+            fetch('/api/auth/verify', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // Token is invalid, clear storage and redirect to auth
+                    localStorage.removeItem('auth_token');
+                    sessionStorage.removeItem('auth_token');
+                    localStorage.removeItem('user_data');
+                    sessionStorage.removeItem('user_data');
+                    window.location.href = '/auth';
+                } else {
+                    // Token is valid, get user data
+                    return response.json();
+                }
+            })
+            .then(data => {
+                if (data && data.user) {
+                    // Store updated user data
+                    const storage = localStorage.getItem('auth_token') ? localStorage : sessionStorage;
+                    storage.setItem('user_data', JSON.stringify(data.user));
+                }
+            })
+            .catch(error => {
+                console.error('Auth check failed:', error);
+                // On error, redirect to auth page
+                window.location.href = '/auth';
+            });
+        })();
+
         class ChatManager {
             constructor() {
-                this.userId = this.getOrCreateUserId();
+                // Get authenticated user data
+                this.userData = this.getAuthenticatedUserData();
+                this.userId = this.userData ? this.userData.id : this.getOrCreateUserId();
+                this.userName = this.userData ? this.userData.name : 'Guest';
+                this.userEmail = this.userData ? this.userData.email : '';
+
                 this.currentConversationId = null;
                 this.conversations = [];
                 this.isLoading = false;
@@ -714,6 +766,62 @@
                 this.initializeElements();
                 this.initializeEventListeners();
                 this.initialize();
+            }
+
+            getAuthenticatedUserData() {
+                try {
+                    const userData = localStorage.getItem('user_data') || sessionStorage.getItem('user_data');
+                    return userData ? JSON.parse(userData) : null;
+                } catch (error) {
+                    console.error('Error parsing user data:', error);
+                    return null;
+                }
+            }
+
+            getAuthToken() {
+                return localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+            }
+
+            async makeAuthenticatedRequest(url, options = {}) {
+                const token = this.getAuthToken();
+
+                const defaultOptions = {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token && { 'Authorization': `Bearer ${token}` })
+                    }
+                };
+
+                const mergedOptions = {
+                    ...defaultOptions,
+                    ...options,
+                    headers: {
+                        ...defaultOptions.headers,
+                        ...options.headers
+                    }
+                };
+
+                const response = await fetch(url, mergedOptions);
+
+                // If unauthorized, redirect to auth page
+                if (response.status === 401) {
+                    this.handleLogout();
+                    throw new Error('Unauthorized');
+                }
+
+                return response;
+            }
+
+            handleLogout() {
+                // Clear all auth data
+                localStorage.removeItem('auth_token');
+                sessionStorage.removeItem('auth_token');
+                localStorage.removeItem('user_data');
+                sessionStorage.removeItem('user_data');
+                localStorage.removeItem('web3_chatbot_user_id');
+
+                // Redirect to auth page
+                window.location.href = '/auth';
             }
 
             initializeElements() {
@@ -727,7 +835,8 @@
                     searchInput: document.getElementById('searchInput'),
                     chatTitle: document.getElementById('chatTitle'),
                     chatInfo: document.getElementById('chatInfo'),
-                    userInfo: document.getElementById('userInfo')
+                    userInfo: document.getElementById('userInfo'),
+                    logoutBtn: document.getElementById('logoutBtn')
                 };
             }
 
@@ -752,6 +861,27 @@
                     this.searchConversations(e.target.value);
                 });
 
+                // Logout button
+                if (this.elements.logoutBtn) {
+                    this.elements.logoutBtn.addEventListener('click', async () => {
+                        await this.logout();
+                    });
+                }
+
+                // FIXED: Use event delegation for dynamic buttons with data attributes
+                document.addEventListener('click', (e) => {
+                    const action = e.target.getAttribute('data-action');
+                    const message = e.target.getAttribute('data-message');
+
+                    if (action) {
+                        e.preventDefault();
+                        this.handleAction(action, e.target);
+                    } else if (message) {
+                        e.preventDefault();
+                        this.sendMessage(message);
+                    }
+                });
+
                 // Keyboard shortcuts
                 document.addEventListener('keydown', (e) => {
                     if (e.ctrlKey && e.key === 'n') {
@@ -761,8 +891,48 @@
                 });
             }
 
+            // FIXED: Handle actions from data attributes
+            handleAction(action, element) {
+                switch (action) {
+                    case 'createNewChat':
+                        this.createNewChat();
+                        break;
+                    case 'exportCurrentChat':
+                        this.exportCurrentChat();
+                        break;
+                    case 'showStats':
+                        this.showStats();
+                        break;
+                    case 'deleteCurrentChat':
+                        this.deleteCurrentChat();
+                        break;
+                    case 'closeModal':
+                        document.getElementById('statsModal').style.display = 'none';
+                        break;
+                    default:
+                        console.warn('Unknown action:', action);
+                }
+            }
+
+            async logout() {
+                try {
+                    const token = this.getAuthToken();
+                    if (token) {
+                        await this.makeAuthenticatedRequest('/api/auth/logout', {
+                            method: 'POST'
+                        });
+                    }
+                } catch (error) {
+                    console.error('Logout error:', error);
+                } finally {
+                    this.handleLogout();
+                }
+            }
+
             async initialize() {
-                this.elements.userInfo.textContent = `User: ${this.userId}`;
+                // Update user info display
+                this.elements.userInfo.textContent = `${this.userName} (${this.userEmail})`;
+
                 await this.loadConversations();
 
                 // Load last active conversation if exists
@@ -783,7 +953,7 @@
 
             async loadConversations() {
                 try {
-                    const response = await fetch(`/api/conversations?user_id=${this.userId}&limit=50`);
+                    const response = await this.makeAuthenticatedRequest(`/api/conversations?user_id=${this.userId}&limit=50`);
                     const data = await response.json();
                     this.conversations = data.conversations || [];
                     this.renderConversations();
@@ -812,6 +982,7 @@
                     const lastMessage = this.getLastMessagePreview(conv);
                     const timeStr = this.formatRelativeTime(conv.updated_at);
 
+                    // FIXED: Use data attributes instead of onclick
                     item.innerHTML = `
                         <div class="conversation-title">
                             <span>${conv.title || 'Untitled Chat'}</span>
@@ -819,16 +990,32 @@
                         <div class="conversation-preview">${lastMessage}</div>
                         <div class="conversation-meta">${conv.message_count || 0} messages • ${timeStr}</div>
                         <div class="conversation-actions">
-                            <button class="action-btn" onclick="chatManager.renameConversation('${conv.id}')" title="Rename">✏️</button>
-                            <button class="action-btn" onclick="chatManager.deleteConversation('${conv.id}')" title="Delete">🗑️</button>
+                            <button class="action-btn" data-action="rename" data-conv-id="${conv.id}" title="Rename">✏️</button>
+                            <button class="action-btn" data-action="delete" data-conv-id="${conv.id}" title="Delete">🗑️</button>
                         </div>
                     `;
 
-                    item.onclick = (e) => {
+                    // FIXED: Add click handler for conversation loading
+                    item.addEventListener('click', (e) => {
                         if (!e.target.classList.contains('action-btn')) {
                             this.loadConversation(conv.id);
                         }
-                    };
+                    });
+
+                    // FIXED: Handle action buttons
+                    item.addEventListener('click', (e) => {
+                        if (e.target.classList.contains('action-btn')) {
+                            e.stopPropagation();
+                            const action = e.target.getAttribute('data-action');
+                            const convId = e.target.getAttribute('data-conv-id');
+
+                            if (action === 'rename') {
+                                this.renameConversation(convId);
+                            } else if (action === 'delete') {
+                                this.deleteConversation(convId);
+                            }
+                        }
+                    });
 
                     container.appendChild(item);
                 });
@@ -842,9 +1029,8 @@
 
                 try {
                     // Create a new conversation via the API
-                    const response = await fetch('/chat', {
+                    const response = await this.makeAuthenticatedRequest('/chat', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             message: "Hello! I'm ready to help with Web3 and cryptocurrency questions.",
                             user_id: this.userId,
@@ -925,7 +1111,7 @@
                     this.renderConversations();
 
                     // Load messages
-                    const response = await fetch(`/api/conversations/${conversationId}/messages?limit=100`);
+                    const response = await this.makeAuthenticatedRequest(`/api/conversations/${conversationId}/messages?limit=100`);
                     const data = await response.json();
 
                     // Update header
@@ -1017,9 +1203,8 @@
                 this.showTypingIndicator();
 
                 try {
-                    const response = await fetch('/chat/stream', {
+                    const response = await this.makeAuthenticatedRequest('/chat/stream', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             message: message,
                             user_id: this.userId,
@@ -1076,6 +1261,13 @@
                                         // Update conversation ID if it changed
                                         if (data.conversation_id && data.conversation_id !== this.currentConversationId) {
                                             this.currentConversationId = data.conversation_id;
+                                        }
+                                        break;
+
+                                    case 'user_info':
+                                        // Update user name display if provided
+                                        if (data.user_name) {
+                                            this.userName = data.user_name;
                                         }
                                         break;
 
@@ -1171,9 +1363,8 @@
                 }
 
                 try {
-                    const response = await fetch('/api/search', {
+                    const response = await this.makeAuthenticatedRequest('/api/search', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             user_id: this.userId,
                             query: query
@@ -1205,9 +1396,8 @@
                 if (!newTitle || newTitle === conversation.title) return;
 
                 try {
-                    const response = await fetch(`/api/conversations/${conversationId}`, {
+                    const response = await this.makeAuthenticatedRequest(`/api/conversations/${conversationId}`, {
                         method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ title: newTitle })
                     });
 
@@ -1231,7 +1421,7 @@
                 }
 
                 try {
-                    await fetch(`/api/conversations/${conversationId}`, {
+                    await this.makeAuthenticatedRequest(`/api/conversations/${conversationId}`, {
                         method: 'DELETE'
                     });
 
@@ -1246,12 +1436,12 @@
                         this.elements.chatInfo.textContent = '';
                         this.disableInput();
 
-                        // Show empty state
+                        // Show empty state with FIXED button
                         this.elements.messagesContainer.innerHTML = `
                             <div class="empty-state">
                                 <div class="empty-state-icon">💬</div>
                                 <div class="empty-state-text">Select a conversation or create a new one to start chatting</div>
-                                <button class="new-chat-btn" onclick="chatManager.createNewChat()">
+                                <button class="new-chat-btn" data-action="createNewChat">
                                     <span>➕</span> Start New Chat
                                 </button>
                             </div>
@@ -1281,7 +1471,7 @@
                 if (!this.currentConversationId) return;
 
                 try {
-                    const response = await fetch(`/api/export/conversation/${this.currentConversationId}`);
+                    const response = await this.makeAuthenticatedRequest(`/api/export/conversation/${this.currentConversationId}`);
                     const blob = await response.blob();
 
                     const url = window.URL.createObjectURL(blob);
@@ -1301,7 +1491,7 @@
 
             async showStats() {
                 try {
-                    const response = await fetch(`/api/users/${this.userId}/stats`);
+                    const response = await this.makeAuthenticatedRequest(`/api/users/${this.userId}/stats`);
                     const stats = await response.json();
 
                     document.getElementById('totalChats').textContent = stats.total_conversations || 0;
@@ -1412,14 +1602,16 @@
 
         // Initialize the chat manager when the page loads
         let chatManager;
-        document.addEventListener('DOMContentLoaded', () => {
-            chatManager = new ChatManager();
-            window.chatManager = chatManager; // Make it globally accessible for onclick handlers
 
-            console.log('🚀 Enhanced Web3 Chat Manager initialized');
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize chat manager
+            chatManager = new ChatManager();
+            window.chatManager = chatManager; // Make it globally accessible for debugging
+
+            console.log('🚀 Enhanced Web3 Chat Manager with Authentication initialized');
         });
 
-        // Add fadeOut animation
+        // Add fadeOut animation CSS
         const style = document.createElement('style');
         style.textContent = `
             @keyframes fadeOut {
@@ -1428,6 +1620,73 @@
             }
         `;
         document.head.appendChild(style);
+
+        // Global utility functions for development/debugging
+        window.chatDebug = {
+            clearMessages: () => {
+                const messages = document.querySelectorAll('.message:not(.system)');
+                messages.forEach(msg => msg.remove());
+                if (window.chatManager) {
+                    window.chatManager.messageCache.clear();
+                }
+            },
+
+            testHealth: async () => {
+                const response = await fetch('/health');
+                return await response.json();
+            },
+
+            getMetrics: async () => {
+                const response = await fetch('/metrics');
+                return await response.json();
+            },
+
+            getUserStats: async () => {
+                if (!window.chatManager) return null;
+                const userId = window.chatManager.userId;
+                const response = await window.chatManager.makeAuthenticatedRequest(`/api/users/${userId}/stats`);
+                return await response.json();
+            },
+
+            getCurrentUser: () => {
+                if (!window.chatManager) return null;
+                return {
+                    userId: window.chatManager.userId,
+                    userName: window.chatManager.userName,
+                    userEmail: window.chatManager.userEmail,
+                    userData: window.chatManager.userData
+                };
+            },
+
+            forceLogout: () => {
+                if (window.chatManager) {
+                    window.chatManager.handleLogout();
+                }
+            },
+
+            testAuth: async () => {
+                const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                if (!token) return 'No token found';
+
+                try {
+                    const response = await fetch('/api/auth/verify', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        return { status: 'valid', data };
+                    } else {
+                        return { status: 'invalid', code: response.status };
+                    }
+                } catch (error) {
+                    return { status: 'error', error: error.message };
+                }
+            }
+        };
+
+        // Export the ChatManager class for potential external use
+        window.ChatManager = ChatManager;
     </script>
 </body>
 </html>
