@@ -370,7 +370,10 @@
             font-size: 0.95rem;
             resize: none;
             max-height: 120px;
+            min-height: 45px;
             transition: all 0.2s;
+            font-family: inherit;
+            line-height: 1.4;
         }
 
         .chat-input:focus {
@@ -391,6 +394,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
+            min-height: 45px;
         }
 
         .send-btn:hover:not(:disabled) {
@@ -580,6 +584,14 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* Keyboard hints */
+        .keyboard-hints {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 8px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -591,7 +603,6 @@
                 <div class="user-info" id="userInfo">Loading...</div>
             </div>
 
-            <!-- FIXED: Remove onclick, use data attributes instead -->
             <button class="new-chat-btn" data-action="createNewChat">
                 <span>➕</span> New Chat
             </button>
@@ -605,7 +616,6 @@
             </div>
 
             <div class="sidebar-footer" style="padding: 15px; border-top: 1px solid #2a2a2a; margin-top: auto;">
-                <!-- FIXED: Remove onclick -->
                 <button id="logoutBtn" style="
                     width: 100%;
                     padding: 10px;
@@ -634,7 +644,6 @@
                     <div class="chat-info" id="chatInfo"></div>
                 </div>
                 <div class="chat-actions">
-                    <!-- FIXED: Remove onclick, use data attributes -->
                     <button class="header-btn" data-action="exportCurrentChat">📥 Export</button>
                     <button class="header-btn" data-action="showStats">📊 Stats</button>
                     <button class="header-btn" data-action="deleteCurrentChat">🗑️ Delete</button>
@@ -645,7 +654,6 @@
                 <div class="empty-state">
                     <div class="empty-state-icon">💬</div>
                     <div class="empty-state-text">Select a conversation or create a new one to start chatting</div>
-                    <!-- FIXED: Remove onclick -->
                     <button class="new-chat-btn" data-action="createNewChat">
                         <span>➕</span> Start New Chat
                     </button>
@@ -668,8 +676,11 @@
                     </button>
                 </form>
 
+                <div class="keyboard-hints">
+                    Press <strong>Enter</strong> to send • <strong>Ctrl+Enter</strong> for new line
+                </div>
+
                 <div class="suggestions">
-                    <!-- FIXED: Remove onclick, use data attributes -->
                     <div class="suggestion-chip" data-message="What is the price of Bitcoin?">BTC Price</div>
                     <div class="suggestion-chip" data-message="Explain DeFi">What is DeFi?</div>
                     <div class="suggestion-chip" data-message="Latest crypto news">Crypto News</div>
@@ -682,7 +693,6 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Chat Statistics</h3>
-                <!-- FIXED: Remove onclick -->
                 <button class="close-btn" data-action="closeModal">&times;</button>
             </div>
             <div class="stats-grid">
@@ -850,10 +860,43 @@
                     }
                 });
 
+                // Enhanced keyboard handling for input - THIS IS THE KEY PART
+                this.elements.chatInput.addEventListener('keydown', (e) => {
+                    // Handle Enter key behavior
+                    if (e.key === 'Enter') {
+                        if (e.ctrlKey || e.shiftKey) {
+                            // Ctrl+Enter or Shift+Enter: Insert new line
+                            // Let the default behavior happen (new line)
+                            setTimeout(() => {
+                                this.autoResizeTextarea();
+                            }, 0);
+                            return;
+                        } else {
+                            // Plain Enter: Send message
+                            e.preventDefault();
+                            e.stopPropagation();
+
+                            const message = this.elements.chatInput.value.trim();
+                            if (message && !this.isLoading && !this.isCreatingNewChat) {
+                                try {
+                                    this.sendMessage(message);
+                                } catch (error) {
+                                    console.error('Error sending message:', error);
+                                }
+                            }
+                            return false; // Ensure form doesn't submit
+                        }
+                    }
+                });
+
                 // Auto-resize textarea
                 this.elements.chatInput.addEventListener('input', () => {
-                    this.elements.chatInput.style.height = 'auto';
-                    this.elements.chatInput.style.height = this.elements.chatInput.scrollHeight + 'px';
+                    this.autoResizeTextarea();
+                });
+
+                // Handle paste events to auto-resize
+                this.elements.chatInput.addEventListener('paste', () => {
+                    setTimeout(() => this.autoResizeTextarea(), 0);
                 });
 
                 // Search functionality
@@ -868,7 +911,7 @@
                     });
                 }
 
-                // FIXED: Use event delegation for dynamic buttons with data attributes
+                // Use event delegation for dynamic buttons with data attributes
                 document.addEventListener('click', (e) => {
                     const action = e.target.getAttribute('data-action');
                     const message = e.target.getAttribute('data-message');
@@ -891,7 +934,22 @@
                 });
             }
 
-            // FIXED: Handle actions from data attributes
+            // Auto-resize textarea method
+            autoResizeTextarea() {
+                const textarea = this.elements.chatInput;
+
+                // Reset height to auto to get the correct scrollHeight
+                textarea.style.height = 'auto';
+
+                // Set the height based on scrollHeight, with min and max constraints
+                const minHeight = 45; // Minimum height
+                const maxHeight = 120; // Maximum height before scrolling
+                const newHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
+
+                textarea.style.height = newHeight + 'px';
+            }
+
+            // Handle actions from data attributes
             handleAction(action, element) {
                 switch (action) {
                     case 'createNewChat':
@@ -982,7 +1040,6 @@
                     const lastMessage = this.getLastMessagePreview(conv);
                     const timeStr = this.formatRelativeTime(conv.updated_at);
 
-                    // FIXED: Use data attributes instead of onclick
                     item.innerHTML = `
                         <div class="conversation-title">
                             <span>${conv.title || 'Untitled Chat'}</span>
@@ -995,14 +1052,14 @@
                         </div>
                     `;
 
-                    // FIXED: Add click handler for conversation loading
+                    // Add click handler for conversation loading
                     item.addEventListener('click', (e) => {
                         if (!e.target.classList.contains('action-btn')) {
                             this.loadConversation(conv.id);
                         }
                     });
 
-                    // FIXED: Handle action buttons
+                    // Handle action buttons
                     item.addEventListener('click', (e) => {
                         if (e.target.classList.contains('action-btn')) {
                             e.stopPropagation();
@@ -1193,6 +1250,8 @@
 
                 this.isLoading = true;
                 this.elements.sendBtn.disabled = true;
+
+                // Clear input and reset height
                 this.elements.chatInput.value = '';
                 this.elements.chatInput.style.height = 'auto';
 
@@ -1436,7 +1495,7 @@
                         this.elements.chatInfo.textContent = '';
                         this.disableInput();
 
-                        // Show empty state with FIXED button
+                        // Show empty state
                         this.elements.messagesContainer.innerHTML = `
                             <div class="empty-state">
                                 <div class="empty-state-icon">💬</div>
@@ -1609,6 +1668,7 @@
             window.chatManager = chatManager; // Make it globally accessible for debugging
 
             console.log('🚀 Enhanced Web3 Chat Manager with Authentication initialized');
+            console.log('💡 Enhanced Features: Enter to send, Ctrl+Enter for new line');
         });
 
         // Add fadeOut animation CSS
