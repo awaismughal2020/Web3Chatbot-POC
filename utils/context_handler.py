@@ -43,12 +43,6 @@ class ContextHandler:
                 "max_output_tokens": 4096,  # Reserve for response
                 "chars_per_token": 4,  # Rough estimate
                 "speed_optimized": True
-            },
-            "meta-llama/llama-4-scout-17b-16e-instruct": {
-                "max_context_tokens": 16000,
-                "max_output_tokens": 1000,
-                "chars_per_token": 4,
-                "speed_optimized": True
             }
         }
 
