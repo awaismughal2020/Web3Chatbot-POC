@@ -676,10 +676,6 @@
                     </button>
                 </form>
 
-                <div class="keyboard-hints">
-                    Press <strong>Enter</strong> to send • <strong>Ctrl+Enter</strong> for new line
-                </div>
-
                 <div class="suggestions">
                     <div class="suggestion-chip" data-message="What is the price of Bitcoin?">BTC Price</div>
                     <div class="suggestion-chip" data-message="Explain DeFi">What is DeFi?</div>
@@ -1043,12 +1039,6 @@
                     item.innerHTML = `
                         <div class="conversation-title">
                             <span>${conv.title || 'Untitled Chat'}</span>
-                        </div>
-                        <div class="conversation-preview">${lastMessage}</div>
-                        <div class="conversation-meta">${conv.message_count || 0} messages • ${timeStr}</div>
-                        <div class="conversation-actions">
-                            <button class="action-btn" data-action="rename" data-conv-id="${conv.id}" title="Rename">✏️</button>
-                            <button class="action-btn" data-action="delete" data-conv-id="${conv.id}" title="Delete">🗑️</button>
                         </div>
                     `;
 
