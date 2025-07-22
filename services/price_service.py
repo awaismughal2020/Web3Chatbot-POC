@@ -249,7 +249,7 @@ Available cryptocurrencies: {', '.join(available_cryptos[:5])}..."""
             # Add timestamp
             timestamp = datetime.now().strftime("%H:%M:%S")
             # cache_indicator = " (cached)" if from_cache else " (live)"
-            response += f"\nUpdated: {timestamp}"
+            #response += f"\nUpdated: {timestamp}"
 
             return response
 
