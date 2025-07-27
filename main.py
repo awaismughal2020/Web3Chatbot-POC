@@ -40,7 +40,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Initialize services
 cache_manager = CacheManager()
 typesense_client = TypesenseClient()
-intent_detector = IntentDetector()
+intent_detector = IntentDetector(
+        use_fine_tuned=True,
+        model_path="AwaisMughal1995/web3chatbot_fine_tuned_bart"
+    )
 chat_service = EnhancedChatService(cache_manager)
 price_service = PriceService(cache_manager)
 auth_service = AuthService()
